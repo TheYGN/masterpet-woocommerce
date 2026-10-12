@@ -248,6 +248,22 @@ final class MasterPet_Sync {
 					return $code;
 				}
 			}
+			// T-293: products that exist only in MasterPet are created here as drafts,
+			// reported back, and then filled by the regular path on the next pull.
+			$creates = is_array( $r['data']['creates'] ?? null ) ? $r['data']['creates'] : array();
+			if ( $creates ) {
+				$report = array( 'created' => array(), 'failed' => array() );
+				foreach ( $creates as $c ) {
+					self::create( $c, $report );
+				}
+				$cr = MasterPet_Client::call( '/v1/created', $report );
+				if ( is_string( $cr ) || 200 !== $cr['status'] ) {
+					$code = is_string( $cr ) ? $cr : (string) ( $cr['data']['error'] ?? 'http_' . $cr['status'] );
+					self::note_error( $code );
+					return $code;
+				}
+				$any_failed = $any_failed || count( $report['failed'] ) > 0;
+			}
 			$any_failed = $any_failed || count( $ack['failed'] ) > 0;
 			MasterPet_Settings::update(
 				array(
@@ -260,6 +276,105 @@ final class MasterPet_Sync {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Creates the skeleton of a MasterPet product on the site (T-293): a simple
+	 * product when it has one variant with no attributes, otherwise a variable
+	 * product with its attributes and one variation per variant, each with its
+	 * SKU. Created as a draft; the regular pull fills the name, price, stock,
+	 * description, image and status right after MasterPet links it.
+	 * A product that fails half-way is removed again (it is ours, seconds old),
+	 * so no orphan is left behind; MasterPet retries it later.
+	 */
+	private static function create( array $c, array &$report ): void {
+		$pid      = (string) ( $c['product_id'] ?? '' );
+		$variants = is_array( $c['variants'] ?? null ) ? $c['variants'] : array();
+		$attrs    = is_array( $c['attributes'] ?? null ) ? $c['attributes'] : array();
+		$name     = mb_substr( sanitize_text_field( (string) ( $c['name'] ?? '' ) ), 0, 300 );
+		if ( '' === $pid || ! $variants ) {
+			$report['failed'][] = array( 'product_id' => $pid, 'error' => 'no_variant' );
+			return;
+		}
+		// Several variants but no attribute in MasterPet: one made-up attribute, the SKU as its value.
+		if ( count( $variants ) > 1 && ! $attrs ) {
+			$values = array();
+			foreach ( $variants as $i => $v ) {
+				$values[]                         = (string) $v['sku'];
+				$variants[ $i ]['attributes'] = array( array( 'name' => 'וריאציה', 'value' => (string) $v['sku'] ) );
+			}
+			$attrs = array( array( 'name' => 'וריאציה', 'values' => $values ) );
+		}
+
+		MasterPet_Lock::$writing = true;
+		$new_id = 0;
+		try {
+			if ( 1 === count( $variants ) && ! $attrs ) {
+				$v       = $variants[0];
+				$product = new WC_Product_Simple();
+				$product->set_name( $name );
+				$product->set_status( 'draft' );
+				$product->set_sku( mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 ) );
+				$new_id = $product->save();
+				$report['created'][] = array(
+					'product_id'     => $pid,
+					'woo_product_id' => $new_id,
+					'woo_type'       => 'simple',
+					'variations'     => array( array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $new_id ) ),
+				);
+				return;
+			}
+
+			$product    = new WC_Product_Variable();
+			$wc_attrs   = array();
+			$position   = 0;
+			foreach ( $attrs as $a ) {
+				$attr = new WC_Product_Attribute();
+				$attr->set_name( mb_substr( sanitize_text_field( (string) $a['name'] ), 0, 100 ) );
+				$attr->set_options( array_values( array_map( 'wc_clean', array_map( 'strval', (array) ( $a['values'] ?? array() ) ) ) ) );
+				$attr->set_position( $position++ );
+				$attr->set_visible( true );
+				$attr->set_variation( true );
+				$wc_attrs[] = $attr;
+			}
+			$product->set_name( $name );
+			$product->set_status( 'draft' );
+			$product->set_attributes( $wc_attrs );
+			$new_id = $product->save();
+
+			$links = array();
+			foreach ( $variants as $v ) {
+				$var = new WC_Product_Variation();
+				$var->set_parent_id( $new_id );
+				$picked = array();
+				foreach ( (array) ( $v['attributes'] ?? array() ) as $va ) {
+					$key            = sanitize_title( sanitize_text_field( (string) $va['name'] ) );
+					$picked[ $key ] = wc_clean( (string) $va['value'] );
+				}
+				$var->set_attributes( $picked );
+				$var->set_sku( mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 ) );
+				$var->set_status( 'private' ); // enabled by the regular pull, with its price
+				$links[] = array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $var->save() );
+			}
+			WC_Product_Variable::sync( $new_id );
+			$report['created'][] = array(
+				'product_id'     => $pid,
+				'woo_product_id' => $new_id,
+				'woo_type'       => 'variable',
+				'variations'     => $links,
+			);
+		} catch ( Throwable $e ) {
+			if ( $new_id ) {
+				$half = wc_get_product( $new_id );
+				if ( $half ) {
+					$half->delete( true );
+				}
+			}
+			$msg                = $e instanceof WC_Data_Exception ? $e->getErrorCode() : get_class( $e );
+			$report['failed'][] = array( 'product_id' => $pid, 'error' => substr( (string) $msg, 0, 120 ) );
+		} finally {
+			MasterPet_Lock::$writing = false;
+		}
 	}
 
 	/**

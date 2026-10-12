@@ -41,7 +41,12 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    `masterpet/v1/doorbell` on the site. The plugin then pulls the changes in
    batches of 50 through Action Scheduler and writes them with the WooCommerce
    CRUD classes, then confirms each one.
-3. On linked products those fields are locked: greyed in the editor and put
+3. Products that exist only in MasterPet (0.3.0): nothing is created until the
+   owner presses "upload products to the site" in MasterPet. From then on every
+   active MasterPet product the owner did not turn off is created here (as a
+   draft skeleton with its variations and SKUs), linked, and filled by the
+   regular pull. A product turned off in MasterPet becomes a draft here.
+4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
    short description and SEO stay open. Disconnecting releases the lock.
 
