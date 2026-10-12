@@ -146,8 +146,8 @@ final class MasterPet_Admin {
 				(int) ( $s['link_result']['linked'] ?? 0 ) + (int) ( $s['link_result']['already'] ?? 0 ),
 				(int) ( $s['link_result']['unlinked'] ?? 0 )
 			),
-			'מנוהל מ-MasterPet'  => 'שם, מחיר רגיל, מלאי, מק"ט, תמונה, תיאור, סטטוס',
-			'פתוח לעריכה כאן'    => 'מחיר מבצע, גלריה, תיאור קצר, קידום',
+			'מנוהל מ-MasterPet'  => 'שם, מחיר רגיל ומבצע, מלאי, מק"ט, תמונה, תיאור, סטטוס, קטגוריות, תגיות',
+			'פתוח לעריכה כאן'    => 'גלריה, תיאור קצר, קידום',
 		);
 		echo '<table class="form-table" role="presentation"><tbody>';
 		foreach ( $rows as $label => $value ) {
