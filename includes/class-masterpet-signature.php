@@ -81,8 +81,6 @@ final class MasterPet_Signature {
 	 * Must match answerBase() in MasterPet's _shared/woo-doorbell.ts.
 	 */
 	public static function answer( string $secret, string $kind, string $site_id, string $nonce ): string {
-		return hash_hmac( 'sha256', $kind . "
-" . strtolower( $site_id ) . "
-" . $nonce, $secret );
+		return hash_hmac( 'sha256', $kind . "\n" . strtolower( $site_id ) . "\n" . $nonce, $secret );
 	}
 }

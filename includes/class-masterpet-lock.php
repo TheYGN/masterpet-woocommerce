@@ -74,6 +74,13 @@ final class MasterPet_Lock {
 		}
 	}
 
+	/**
+	 * Puts every locked field back to what MasterPet wrote. Compares the
+	 * product's CURRENT value, not only its pending changes: the WordPress edit
+	 * screen writes the title, content, status and featured image to the
+	 * database before WooCommerce loads the product, so those never show up as
+	 * changes (code review 12.10).
+	 */
 	private static function revert( WC_Product $product, bool $with_stock ): void {
 		if ( self::$writing || ! self::is_managed( $product ) ) {
 			return;
@@ -87,12 +94,13 @@ final class MasterPet_Lock {
 			$keys[] = 'manage_stock';
 			$keys[] = 'stock_quantity';
 		}
-		$changes = $product->get_changes();
 		foreach ( $keys as $key ) {
-			if ( ! array_key_exists( $key, $snap ) || ! array_key_exists( $key, $changes ) ) {
+			if ( ! array_key_exists( $key, $snap ) ) {
 				continue;
 			}
-			if ( $changes[ $key ] == $snap[ $key ] ) { // phpcs:ignore WordPress.PHP.StrictComparisons -- '10' vs '10.00' style values
+			$getter = 'get_' . $key;
+			$now    = $product->{$getter}( 'edit' );
+			if ( self::same( $key, $now, $snap[ $key ] ) ) {
 				continue;
 			}
 			$setter = 'set_' . $key;
@@ -102,6 +110,20 @@ final class MasterPet_Lock {
 				continue; // e.g. the SKU is taken now; the next sync reports it
 			}
 		}
+	}
+
+	/** Prices as numbers, everything else as exact strings (never PHP's loose ==). */
+	private static function same( string $key, $a, $b ): bool {
+		if ( 'regular_price' === $key || 'stock_quantity' === $key ) {
+			if ( '' === (string) $a || '' === (string) $b || null === $a || null === $b ) {
+				return (string) $a === (string) $b;
+			}
+			return wc_format_decimal( $a, wc_get_price_decimals() ) === wc_format_decimal( $b, wc_get_price_decimals() );
+		}
+		if ( 'manage_stock' === $key ) {
+			return (bool) $a === (bool) $b;
+		}
+		return (string) $a === (string) $b;
 	}
 
 	public static function on_any_save( $product ): void {
@@ -156,6 +178,8 @@ jQuery(function ($) {
 		$('#title, #_sku, #_regular_price, #_stock, input[name^="variable_sku"], input[name^="variable_regular_price"], input[name^="variable_stock"]')
 			.prop('readonly', true).css('background', '#f0f0f1');
 		$('#_manage_stock, input[name^="variable_manage_stock"], input[name^="variable_enabled"]').prop('disabled', true);
+		// Description, status and the main image are put back on save; greyed so the owner sees it first.
+		$('#postdivrich, #submitdiv .misc-pub-post-status, #postimagediv').css({ opacity: 0.6, 'pointer-events': 'none' });
 	};
 	lock();
 	$('#woocommerce-product-data').on('woocommerce_variations_loaded', lock);

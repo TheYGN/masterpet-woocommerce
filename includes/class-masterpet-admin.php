@@ -141,7 +141,7 @@ final class MasterPet_Admin {
 			'סניף'               => (string) ( $s['branch_name'] ?? '-' ),
 			'בדיקת קשר אחרונה'   => empty( $s['last_check'] ) ? '-' : self::since( (int) $s['last_check'] ),
 			'עדכון מוצרים אחרון' => empty( $s['sync_last'] ) ? 'עוד לא' : self::since( (int) $s['sync_last'] ),
-			'קישור לפי מק"ט'     => empty( $s['first_link_done'] ) ? 'רץ עכשיו' : sprintf(
+			'קישור לפי מק"ט'     => empty( $s['first_link_done'] ) ? ( empty( $s['sync_error'] ) ? 'רץ עכשיו' : 'נעצר, ננסה שוב אוטומטית' ) : sprintf(
 				'%d מקושרים, %d לא מקושרים',
 				(int) ( $s['link_result']['linked'] ?? 0 ) + (int) ( $s['link_result']['already'] ?? 0 ),
 				(int) ( $s['link_result']['unlinked'] ?? 0 )

@@ -26,7 +26,8 @@ final class MasterPet_Sync {
 	const LINK_PAGES    = 8;    // catalog pages per job (200 parents), then the job reschedules itself
 	const PULL_BATCHES  = 10;   // 10 × 50 products per job, then the job reschedules itself
 	const CONTINUE_LINK = 'continue';
-	const DESC_MAX      = 5000;
+	const DESC_MAX      = 20000; // the same cap as MasterPet, so a long text is never cut short
+	const LINK_BYTES    = 600000; // a link-report request stays well under MasterPet's 1 MB
 
 	public static function init(): void {
 		add_action( self::HOOK, array( __CLASS__, 'run' ) );
@@ -99,6 +100,7 @@ final class MasterPet_Sync {
 		$totals = is_array( $s['link_totals'] ?? null ) && $page > 1
 			? $s['link_totals'] : array( 'linked' => 0, 'already' => 0, 'unlinked' => 0 );
 		$items  = array();
+		$bytes  = 0;
 		$pages  = 0;
 		do {
 			$ids = wc_get_products(
@@ -134,24 +136,40 @@ final class MasterPet_Sync {
 							'name'      => $v->get_name( 'edit' ),
 						);
 					}
-					// A parent always travels with its variations; a giant one is cut, never split.
+					// A parent always travels with its variations. Past 450 variations
+					// the rest is not sent (MasterPet takes 500 items a request); they
+					// stay unlinked and the owner links them by hand (B2).
 					$group = array_slice( $group, 0, 450 );
-					if ( count( $items ) + count( $group ) > self::LINK_ITEMS && $items ) {
+					$size  = strlen( (string) wp_json_encode( $group, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+					if ( $items && ( count( $items ) + count( $group ) > self::LINK_ITEMS || $bytes + $size > self::LINK_BYTES ) ) {
 						$r = self::send_link_page( $items, false, $totals );
 						if ( true !== $r ) {
 							return $r;
 						}
 						$items = array();
+						$bytes = 0;
 					}
-					$items = array_merge( $items, $group );
+					$items  = array_merge( $items, $group );
+					$bytes += $size;
 				} else {
-					$items[] = array(
+					$one   = array(
 						'woo_id'      => $product->get_id(),
 						'type'        => 'simple',
 						'sku'         => (string) $product->get_sku( 'edit' ),
 						'name'        => $product->get_name( 'edit' ),
 						'description' => $desc,
 					);
+					$size  = strlen( (string) wp_json_encode( $one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+					if ( $items && $bytes + $size > self::LINK_BYTES ) {
+						$r = self::send_link_page( $items, false, $totals );
+						if ( true !== $r ) {
+							return $r;
+						}
+						$items = array();
+						$bytes = 0;
+					}
+					$items[] = $one;
+					$bytes  += $size;
 				}
 				if ( count( $items ) >= self::LINK_ITEMS ) {
 					$r = self::send_link_page( $items, false, $totals );
@@ -159,6 +177,7 @@ final class MasterPet_Sync {
 						return $r;
 					}
 					$items = array();
+					$bytes = 0;
 				}
 			}
 			$page++;
@@ -204,6 +223,7 @@ final class MasterPet_Sync {
 
 	/** @return bool|string true = more is waiting (reschedule), false = done, string = error */
 	private static function pull() {
+		$any_failed = false;
 		for ( $i = 0; $i < self::PULL_BATCHES; $i++ ) {
 			$r = MasterPet_Client::call( '/v1/changes', array( 'limit' => 50 ) );
 			if ( is_string( $r ) ) {
@@ -228,10 +248,11 @@ final class MasterPet_Sync {
 					return $code;
 				}
 			}
+			$any_failed = $any_failed || count( $ack['failed'] ) > 0;
 			MasterPet_Settings::update(
 				array(
 					'sync_last'  => time(),
-					'sync_error' => count( $ack['failed'] ) ? 'some_failed' : '',
+					'sync_error' => $any_failed ? 'some_failed' : '',
 				)
 			);
 			if ( empty( $r['data']['has_more'] ) ) {
@@ -241,8 +262,13 @@ final class MasterPet_Sync {
 		return true;
 	}
 
+	/**
+	 * FR-12. With WooCommerce tax off (common in Israel: prices typed with VAT),
+	 * the price on the site is what the customer pays, so it gets the gross.
+	 * With tax on, it follows "prices entered with tax".
+	 */
 	private static function price( array $v ): string {
-		$gross = 'yes' === get_option( 'woocommerce_prices_include_tax' );
+		$gross = ! wc_tax_enabled() || wc_prices_include_tax();
 		return wc_format_decimal( $gross ? $v['price_gross'] : $v['price_net'] );
 	}
 
@@ -256,7 +282,12 @@ final class MasterPet_Sync {
 		$product = $woo_id ? wc_get_product( $woo_id ) : null;
 		$type    = (string) ( $item['woo_type'] ?? '' );
 
-		if ( ! $product || 'trash' === $product->get_status() || ! $product->is_type( $type ) ) {
+		if ( $product && 'trash' === $product->get_status() ) {
+			// In the trash: kept linked, retried later, so restoring it resumes the sync.
+			$ack['failed'][] = array( 'product_id' => $pid, 'version' => $version, 'error' => 'in_trash' );
+			return;
+		}
+		if ( ! $product || ! $product->is_type( $type ) ) {
 			$ack['missing'][] = array( 'product_id' => $pid );
 			return;
 		}
@@ -267,14 +298,13 @@ final class MasterPet_Sync {
 			$published = ! empty( $item['published'] );
 			$variants  = is_array( $item['variants'] ?? null ) ? $item['variants'] : array();
 
-			$product->set_name( (string) $item['name'] );
+			// Plain text only: the name is printed on the storefront unescaped by some themes.
+			$product->set_name( mb_substr( sanitize_text_field( (string) $item['name'] ), 0, 300 ) );
 			$desc = (string) ( $item['description'] ?? '' );
 			// Only when the text differs: the site's own formatting of the same words is kept.
 			if ( self::plain( (string) $product->get_description( 'edit' ) ) !== self::plain( $desc ) ) {
 				$product->set_description( wpautop( esc_html( $desc ) ) );
 			}
-			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
-
 			if ( 'simple' === $type ) {
 				$v = $variants[0] ?? null;
 				if ( ! $v ) {
@@ -299,6 +329,8 @@ final class MasterPet_Sync {
 				}
 			}
 
+			// Last, so a product that fails above never downloads the image again on every retry.
+			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
 			$product->set_status( $published ? 'publish' : 'draft' );
 			$product->update_meta_data( '_masterpet_site', $site_id );
 			$product->update_meta_data( '_masterpet_product_id', $pid );
@@ -317,7 +349,8 @@ final class MasterPet_Sync {
 	}
 
 	private static function stock_and_price( WC_Product $p, array $v ): void {
-		$sku = (string) $v['sku'];
+		// Plain text only (WooCommerce prints the SKU unescaped in some templates).
+		$sku = mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 );
 		if ( $p->get_sku( 'edit' ) !== $sku ) {
 			$p->set_sku( $sku ); // throws WC_Data_Exception when another product already uses it
 		}
@@ -344,17 +377,35 @@ final class MasterPet_Sync {
 		if ( $current && $ours === $url ) {
 			return; // already this one
 		}
+		// Only MasterPet's public storage on its own server: https, same host, no port.
 		$server = wp_parse_url( (string) ( MasterPet_Settings::get()['server'] ?? '' ), PHP_URL_HOST );
 		$u      = wp_parse_url( $url );
-		if ( empty( $u['scheme'] ) || 'https' !== $u['scheme'] || empty( $u['host'] ) || $u['host'] !== $server ) {
+		if ( empty( $u['scheme'] ) || 'https' !== $u['scheme'] || empty( $u['host'] ) || $u['host'] !== $server
+			|| isset( $u['port'] ) || isset( $u['user'] ) || 0 !== strpos( (string) ( $u['path'] ?? '' ), '/storage/v1/object/public/' ) ) {
 			return;
 		}
-		require_once ABSPATH . 'wp-admin/includes/media.php';
-		require_once ABSPATH . 'wp-admin/includes/file.php';
-		require_once ABSPATH . 'wp-admin/includes/image.php';
-		$att = media_sideload_image( $url, $product->get_id(), $product->get_name( 'edit' ), 'id' );
-		if ( is_wp_error( $att ) ) {
-			return; // price and stock still go through; the next change tries the image again
+		// The same URL already downloaded (for this or an earlier try): reuse it.
+		$existing = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'post_status'    => 'inherit',
+				'meta_key'       => '_masterpet_source_url', // phpcs:ignore WordPress.DB.SlowDBQuery -- one indexed lookup per image change
+				'meta_value'     => $url, // phpcs:ignore WordPress.DB.SlowDBQuery
+				'fields'         => 'ids',
+				'posts_per_page' => 1,
+			)
+		);
+		if ( $existing ) {
+			$att = (int) $existing[0];
+		} else {
+			require_once ABSPATH . 'wp-admin/includes/media.php';
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+			require_once ABSPATH . 'wp-admin/includes/image.php';
+			$att = media_sideload_image( $url, $product->get_id(), $product->get_name( 'edit' ), 'id' );
+			if ( is_wp_error( $att ) ) {
+				return; // price and stock still go through; the next change tries the image again
+			}
+			update_post_meta( (int) $att, '_masterpet_source_url', $url );
 		}
 		$product->set_image_id( (int) $att );
 		$product->update_meta_data( '_masterpet_image_url', $url );

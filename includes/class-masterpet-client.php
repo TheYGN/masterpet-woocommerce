@@ -106,7 +106,9 @@ final class MasterPet_Client {
 		if ( ! $secret ) {
 			return 'secret_unreadable';
 		}
-		$body  = wp_json_encode( $payload );
+		// Hebrew as UTF-8 (2 bytes a letter, not a 6-byte \uXXXX): a catalog page
+		// stays far below MasterPet's 1 MB limit. The signature is over these bytes.
+		$body  = (string) wp_json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		$ts    = (string) time();
 		$nonce = MasterPet_Signature::new_nonce();
 		$res   = wp_remote_post(
