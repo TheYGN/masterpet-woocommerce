@@ -306,22 +306,41 @@ final class MasterPet_Sync {
 			$attrs = array( array( 'name' => 'וריאציה', 'values' => $values ) );
 		}
 
-		// Already here (a crash after an earlier create, before MasterPet heard of
-		// it, or the owner added it by hand): report the existing ids, never a twin.
-		$found = self::existing_by_sku( $variants );
-		if ( $found ) {
-			$report['created'][] = array_merge( array( 'product_id' => $pid ), $found );
-			return;
-		}
-
 		MasterPet_Lock::$writing = true;
 		$new_id = 0;
 		try {
+			// Started here before and cut off (a PHP timeout ends the run without
+			// the catch below): finish that product, never a second one.
+			$pending = self::pending_parent( $pid );
+			if ( $pending && $pending->is_type( 'variable' ) ) {
+				$report['created'][] = array(
+					'product_id'     => $pid,
+					'woo_product_id' => $pending->get_id(),
+					'woo_type'       => 'variable',
+					'variations'     => self::ensure_variations( $pending->get_id(), $variants ),
+				);
+				return;
+			}
+			// Already here (the owner added it, or a create whose report was lost):
+			// report the existing ids, never a twin.
+			$found = $pending
+				? array(
+					'woo_product_id' => $pending->get_id(),
+					'woo_type'       => 'simple',
+					'variations'     => array( array( 'variant_id' => (string) $variants[0]['variant_id'], 'woo_variation_id' => $pending->get_id() ) ),
+				)
+				: self::existing_by_sku( $variants );
+			if ( $found ) {
+				$report['created'][] = array_merge( array( 'product_id' => $pid ), $found );
+				return;
+			}
+
 			if ( 1 === count( $variants ) && ! $attrs ) {
 				$v       = $variants[0];
 				$product = new WC_Product_Simple();
 				$product->set_name( $name );
 				$product->set_status( 'draft' );
+				$product->update_meta_data( '_masterpet_pending', $pid );
 				$product->set_sku( mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 ) );
 				$new_id = $product->save();
 				$report['created'][] = array(
@@ -338,7 +357,7 @@ final class MasterPet_Sync {
 			$position   = 0;
 			foreach ( $attrs as $a ) {
 				$attr = new WC_Product_Attribute();
-				$attr->set_name( mb_substr( sanitize_text_field( (string) $a['name'] ), 0, 100 ) );
+				$attr->set_name( self::attr_name( (string) $a['name'] ) );
 				$attr->set_options( array_values( array_map( 'wc_clean', array_map( 'strval', (array) ( $a['values'] ?? array() ) ) ) ) );
 				$attr->set_position( $position++ );
 				$attr->set_visible( true );
@@ -348,23 +367,11 @@ final class MasterPet_Sync {
 			$product->set_name( $name );
 			$product->set_status( 'draft' );
 			$product->set_attributes( $wc_attrs );
+			// Saved with the parent's first write, so a cut-off run is found and finished next time.
+			$product->update_meta_data( '_masterpet_pending', $pid );
 			$new_id = $product->save();
 
-			$links = array();
-			foreach ( $variants as $v ) {
-				$var = new WC_Product_Variation();
-				$var->set_parent_id( $new_id );
-				$picked = array();
-				foreach ( (array) ( $v['attributes'] ?? array() ) as $va ) {
-					$key            = sanitize_title( sanitize_text_field( (string) $va['name'] ) );
-					$picked[ $key ] = wc_clean( (string) $va['value'] );
-				}
-				$var->set_attributes( $picked );
-				$var->set_sku( mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 ) );
-				$var->set_status( 'private' ); // enabled by the regular pull, with its price
-				$links[] = array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $var->save() );
-			}
-			WC_Product_Variable::sync( $new_id );
+			$links = self::ensure_variations( $new_id, $variants );
 			$report['created'][] = array(
 				'product_id'     => $pid,
 				'woo_product_id' => $new_id,
@@ -383,6 +390,58 @@ final class MasterPet_Sync {
 		} finally {
 			MasterPet_Lock::$writing = false;
 		}
+	}
+
+	/** The attribute name as stored on the parent; the variation key is built from the same string. */
+	private static function attr_name( string $name ): string {
+		return mb_substr( sanitize_text_field( $name ), 0, 100 );
+	}
+
+	/** A product this plugin started for MasterPet product $pid (any status but trash). */
+	private static function pending_parent( string $pid ): ?WC_Product {
+		$ids = get_posts(
+			array(
+				'post_type'      => 'product',
+				'post_status'    => array( 'draft', 'publish', 'private', 'pending' ),
+				'meta_key'       => '_masterpet_pending', // phpcs:ignore WordPress.DB.SlowDBQuery -- one lookup per creation
+				'meta_value'     => $pid, // phpcs:ignore WordPress.DB.SlowDBQuery
+				'fields'         => 'ids',
+				'posts_per_page' => 1,
+			)
+		);
+		$p = $ids ? wc_get_product( (int) $ids[0] ) : null;
+		return $p ?: null;
+	}
+
+	/**
+	 * One variation per variant under $parent_id: reuses one that already has
+	 * the SKU there, creates the missing ones (private until the regular pull
+	 * enables it with its price). Returns the links for /v1/created.
+	 */
+	private static function ensure_variations( int $parent_id, array $variants ): array {
+		$links = array();
+		foreach ( $variants as $v ) {
+			$sku      = mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 );
+			$existing = wc_get_product_id_by_sku( $sku );
+			$found    = $existing ? wc_get_product( $existing ) : null;
+			if ( $found && $found->is_type( 'variation' ) && $found->get_parent_id() === $parent_id ) {
+				$links[] = array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $found->get_id() );
+				continue;
+			}
+			$var = new WC_Product_Variation();
+			$var->set_parent_id( $parent_id );
+			$picked = array();
+			foreach ( (array) ( $v['attributes'] ?? array() ) as $va ) {
+				$key            = sanitize_title( self::attr_name( (string) $va['name'] ) );
+				$picked[ $key ] = wc_clean( (string) $va['value'] );
+			}
+			$var->set_attributes( $picked );
+			$var->set_sku( $sku );
+			$var->set_status( 'private' );
+			$links[] = array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $var->save() );
+		}
+		WC_Product_Variable::sync( $parent_id );
+		return $links;
 	}
 
 	/**
