@@ -18,6 +18,8 @@ final class MasterPet_Admin {
 		add_action( 'admin_post_masterpet_connect', array( __CLASS__, 'handle_connect' ) );
 		add_action( 'admin_post_masterpet_check', array( __CLASS__, 'handle_check' ) );
 		add_action( 'admin_post_masterpet_disconnect', array( __CLASS__, 'handle_disconnect' ) );
+		add_action( 'admin_post_masterpet_sync', array( __CLASS__, 'handle_sync' ) );
+		add_action( 'admin_post_masterpet_relink', array( __CLASS__, 'handle_relink' ) );
 	}
 
 	public static function menu(): void {
@@ -59,6 +61,31 @@ final class MasterPet_Admin {
 			self::back( 'האתר נותק מ-MasterPet.', 'success' );
 		}
 		self::back( 'האתר נותק כאן, אבל MasterPet לא אישר. נתק גם במסך האינטגרציות ב-MasterPet, אחרת הסניף יישאר תפוס.', 'error' );
+	}
+
+	public static function handle_sync(): void {
+		self::guard( 'masterpet_sync' );
+		MasterPet_Sync::schedule();
+		self::back( 'הסנכרון התחיל. המוצרים יתעדכנו בדקות הקרובות.', 'success' );
+	}
+
+	/** Runs the SKU link again: picks up products added to the site or to MasterPet since. */
+	public static function handle_relink(): void {
+		self::guard( 'masterpet_relink' );
+		MasterPet_Settings::update( array( 'first_link_done' => 0, 'link_page' => 1, 'link_totals' => null ) );
+		MasterPet_Sync::schedule();
+		self::back( 'הקישור לפי מק"ט רץ שוב. מוצרים שכבר מקושרים לא משתנים.', 'success' );
+	}
+
+	/** Sync error codes → what the store owner reads. */
+	private static function sync_error( string $code ): string {
+		$map = array(
+			'some_failed'       => 'חלק מהמוצרים לא התעדכנו (למשל מק"ט שכבר תפוס באתר). ננסה שוב אוטומטית.',
+			'network'           => 'אין קשר ל-MasterPet כרגע. ננסה שוב אוטומטית.',
+			'disconnected'      => 'החיבור נותק ב-MasterPet.',
+			'secret_unreadable' => 'פרטי החיבור באתר כבר לא קריאים. נתק וחבר מחדש עם קוד חדש.',
+		);
+		return $map[ $code ] ?? 'העדכון האחרון נכשל. ננסה שוב אוטומטית.';
 	}
 
 	private static function since( int $ts ): string {
@@ -113,7 +140,13 @@ final class MasterPet_Admin {
 		$rows = array(
 			'סניף'               => (string) ( $s['branch_name'] ?? '-' ),
 			'בדיקת קשר אחרונה'   => empty( $s['last_check'] ) ? '-' : self::since( (int) $s['last_check'] ),
-			'מנוהל מ-MasterPet'  => 'שם, מחיר רגיל, מלאי, מק"ט, תמונה, תיאור',
+			'עדכון מוצרים אחרון' => empty( $s['sync_last'] ) ? 'עוד לא' : self::since( (int) $s['sync_last'] ),
+			'קישור לפי מק"ט'     => empty( $s['first_link_done'] ) ? 'רץ עכשיו' : sprintf(
+				'%d מקושרים, %d לא מקושרים',
+				(int) ( $s['link_result']['linked'] ?? 0 ) + (int) ( $s['link_result']['already'] ?? 0 ),
+				(int) ( $s['link_result']['unlinked'] ?? 0 )
+			),
+			'מנוהל מ-MasterPet'  => 'שם, מחיר רגיל, מלאי, מק"ט, תמונה, תיאור, סטטוס',
 			'פתוח לעריכה כאן'    => 'מחיר מבצע, גלריה, תיאור קצר, קידום',
 		);
 		echo '<table class="form-table" role="presentation"><tbody>';
@@ -121,8 +154,13 @@ final class MasterPet_Admin {
 			echo '<tr><th scope="row">' . esc_html( $label ) . '</th><td>' . esc_html( $value ) . '</td></tr>';
 		}
 		echo '</tbody></table>';
-		echo '<p class="description">' . esc_html( 'סנכרון המוצרים וההזמנות יופעל בעדכון הבא של התוסף.' ) . '</p>';
+		if ( ! empty( $s['sync_error'] ) ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( self::sync_error( (string) $s['sync_error'] ) ) . '</p></div>';
+		}
+		echo '<p class="description">' . esc_html( 'מוצרים באתר בלי מק"ט תואם ב-MasterPet לא משתנים. ההזמנות יחוברו בעדכון הבא של התוסף.' ) . '</p>';
 
+		self::button( 'masterpet_sync', 'סנכרן עכשיו', 'button button-primary' );
+		self::button( 'masterpet_relink', 'קשר שוב לפי מק"ט' );
 		self::button( 'masterpet_check', 'בדיקת קשר' );
 		self::button( 'masterpet_disconnect', 'נתק', 'button button-link-delete' );
 		echo '</div>';

@@ -12,8 +12,8 @@ MasterPet.
 
 | Phase | What | State |
 |---|---|---|
-| A | Connection: one-time code, per-site secret, signed requests, status screen | in progress |
-| B | Products from MasterPet | planned |
+| A | Connection: one-time code, per-site secret, signed requests, status screen | done (0.1.x) |
+| B | Products from MasterPet: first link by SKU, signed doorbell, pull, locked fields | in progress (0.2.0) |
 | C | Orders and card payment through MasterPet | planned |
 | D | Status and credits back to the store | planned |
 
@@ -30,11 +30,31 @@ The full specification lives in the MasterPet repository (PRD #13.1).
 
 The first letter of the code picks the server: `T` = test, `P` = production.
 
+## How products sync (0.2.0)
+
+1. Right after connecting, the plugin sends its catalog (simple products, and
+   variable products with their variations) to MasterPet. MasterPet links each
+   item by its SKU only (never the barcode). Items without a matching SKU stay
+   as they are and show in MasterPet's "not linked" list. Nothing is deleted.
+2. When something changes in MasterPet (name, description, image, SKU, regular
+   price, stock of the connected branch, status), MasterPet's clock rings
+   `masterpet/v1/doorbell` on the site. The plugin then pulls the changes in
+   batches of 50 through Action Scheduler and writes them with the WooCommerce
+   CRUD classes, then confirms each one.
+3. On linked products those fields are locked: greyed in the editor and put
+   back on save (admin form, REST API, any other save). Sale price, gallery,
+   short description and SEO stay open. Disconnecting releases the lock.
+
+Before MasterPet rings a site for the first time it sends a signed ping and
+expects an answer signed with the site's secret, so it only ever rings the real
+site. It refuses private and internal addresses and never follows redirects.
+
 ## Security
 
 - Every request between the site and MasterPet is signed:
-  `HMAC-SHA256(secret, METHOD \n route \n ts \n nonce \n sha256(body))`, with a
-  300-second window and a single-use nonce.
+  `HMAC-SHA256(secret, METHOD \n route \n site_id \n ts \n nonce \n sha256(body))`,
+  with a 300-second window and a single-use nonce, in both directions. The
+  site's answers to the doorbell and the ping are signed too.
 - The secret is stored encrypted in the site's options (key derived from the
   site's WordPress salts) when OpenSSL is available.
 - This repository holds no secret of any kind.

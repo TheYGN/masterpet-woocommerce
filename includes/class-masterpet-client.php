@@ -75,15 +75,29 @@ final class MasterPet_Client {
 
 		MasterPet_Settings::save_connection( (string) $data['site_id'], (string) $data['secret'], $server, $data['branch_name'] ?? null );
 		self::heartbeat();
+		// The first link by SKU starts now; MasterPet's clock would ring for it within minutes anyway.
+		MasterPet_Sync::schedule();
 		return true;
 	}
 
 	/**
-	 * Signed POST to fn-woo-api.
+	 * Signed POST to fn-woo-api (also used by MasterPet_Sync).
 	 *
 	 * @return array{status:int,data:?array}|string array on an answer; 'secret_unreadable' or 'network' otherwise.
 	 */
-	private static function signed_post( string $route, array $payload ) {
+	public static function call( string $route, array $payload ) {
+		$r = self::signed_post( $route, $payload, 30 );
+		if ( is_array( $r ) && 410 === $r['status'] ) {
+			// Disconnected from the MasterPet side: forget the secret, release the fields.
+			MasterPet_Settings::update( array( 'status' => 'disconnected', 'secret' => '', 'last_error' => 'disconnected' ) );
+		}
+		return $r;
+	}
+
+	/**
+	 * @return array{status:int,data:?array}|string
+	 */
+	private static function signed_post( string $route, array $payload, int $timeout = 15 ) {
 		$s      = MasterPet_Settings::get();
 		$secret = MasterPet_Settings::secret();
 		if ( empty( $s['site_id'] ) || empty( $s['server'] ) ) {
@@ -98,7 +112,7 @@ final class MasterPet_Client {
 		$res   = wp_remote_post(
 			$s['server'] . '/functions/v1/fn-woo-api' . $route,
 			array(
-				'timeout'     => 15,
+				'timeout'     => $timeout,
 				'redirection' => 0,
 				'headers'     => array(
 					'Content-Type'      => 'application/json',
