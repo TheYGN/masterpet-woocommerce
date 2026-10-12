@@ -61,10 +61,12 @@ final class MasterPet_Settings {
 		return hash( 'sha256', wp_salt( 'auth' ) . '|masterpet-wc', true );
 	}
 
+	/** The secret is never stored unencrypted: connecting is refused without OpenSSL. */
+	public static function can_encrypt(): bool {
+		return function_exists( 'openssl_encrypt' ) && in_array( 'aes-256-gcm', openssl_get_cipher_methods(), true );
+	}
+
 	private static function encrypt( string $plain ): string {
-		if ( ! function_exists( 'openssl_encrypt' ) ) {
-			return 'plain:' . $plain;
-		}
 		$iv  = random_bytes( 12 );
 		$tag = '';
 		$ct  = openssl_encrypt( $plain, 'aes-256-gcm', self::key(), OPENSSL_RAW_DATA, $iv, $tag );
@@ -72,9 +74,6 @@ final class MasterPet_Settings {
 	}
 
 	private static function decrypt( string $stored ): ?string {
-		if ( strpos( $stored, 'plain:' ) === 0 ) {
-			return substr( $stored, 6 );
-		}
 		if ( strpos( $stored, 'gcm:' ) !== 0 || ! function_exists( 'openssl_decrypt' ) ) {
 			return null;
 		}

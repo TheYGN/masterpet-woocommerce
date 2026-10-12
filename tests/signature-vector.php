@@ -27,9 +27,14 @@ $body   = '{"plugin_version":"1.0.0"}';
 echo "signature-vector:\n";
 check( 'body sha256 matches', hash( 'sha256', $body ) === '405227dfc4a216276daa93e2710f9fe70e67774b825e882b77c971e78c07c84b' );
 check(
-	'signature matches the MasterPet vector',
-	MasterPet_Signature::sign( $secret, 'post', '/v1/heartbeat', '1760000000', 'abcdefghijklmnop0123', $body )
-		=== '5b9109ec9867b97d38a25a21ef6040e9f262f457d98f1f2d201c99a6dc20811a'
+	'signature matches the MasterPet vector (site id included)',
+	MasterPet_Signature::sign( $secret, 'post', '/v1/heartbeat', '11111111-1111-4111-8111-111111111111', '1760000000', 'abcdefghijklmnop0123', $body )
+		=== '89dc7974c326187cf9d0989d561ff6a6f8de4048c443b4f25cb6c41f02b76663'
+);
+check(
+	'an uppercase site id signs the same',
+	MasterPet_Signature::sign( $secret, 'POST', '/v1/heartbeat', '11111111-1111-4111-8111-111111111111', '1760000000', 'abcdefghijklmnop0123', $body )
+		=== MasterPet_Signature::sign( $secret, 'POST', '/v1/heartbeat', strtoupper( '11111111-1111-4111-8111-111111111111' ), '1760000000', 'abcdefghijklmnop0123', $body )
 );
 check( 'code normalizes like MasterPet', MasterPet_Signature::normalize_code( 't-7kq2-rx9d-mvpa' ) === 'T7KQ2RX9DMVPA' );
 check( 'code hash matches the MasterPet literal', hash( 'sha256', 'T7KQ2RX9DMVPA' ) === 'c90a699c5eb61aec843db288460ac88d5a5110fff690347bc48d0cab7063ed31' );

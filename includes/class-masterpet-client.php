@@ -18,7 +18,9 @@ final class MasterPet_Client {
 			'feature_off'            => 'המסלול של העסק ב-MasterPet לא כולל חיבור אתר.',
 			'branch_has_site'        => 'לסניף הזה כבר מחובר אתר אחר ב-MasterPet.',
 			'tenant_not_operational' => 'החשבון ב-MasterPet לא פעיל כרגע.',
-			'bad_request'            => 'כתובת האתר חייבת לעבוד ב-https.',
+			'site_url_invalid'       => 'כתובת האתר חייבת לעבוד ב-https ולהיות כתובת ציבורית.',
+			'no_encryption'          => 'בשרת של האתר חסר רכיב ההצפנה OpenSSL, ולכן אי אפשר לשמור את החיבור בבטחה. פנה לחברת האחסון.',
+			'secret_unreadable'      => 'פרטי החיבור באתר כבר לא קריאים (מפתחות האבטחה של וורדפרס הוחלפו). נתק כאן, נתק גם במסך האינטגרציות ב-MasterPet, וחבר מחדש עם קוד חדש.',
 			'disconnected'           => 'החיבור נותק ב-MasterPet.',
 			'bad_signature'          => 'החיבור לא מזוהה. נתק וחבר מחדש עם קוד חדש.',
 			'stale_request'          => 'שעון השרת של האתר לא מדויק. בדוק את השעה בשרת.',
@@ -42,6 +44,9 @@ final class MasterPet_Client {
 	 * @return true|string true, or a message for the owner.
 	 */
 	public static function connect( string $raw_code ) {
+		if ( ! MasterPet_Settings::can_encrypt() ) {
+			return self::message( 'no_encryption' );
+		}
 		$code = MasterPet_Signature::normalize_code( $raw_code );
 		if ( null === $code ) {
 			return self::message( 'code_invalid' );
@@ -75,13 +80,16 @@ final class MasterPet_Client {
 	/**
 	 * Signed POST to fn-woo-api.
 	 *
-	 * @return array{status:int,data:?array}|null null when not connected or unreachable.
+	 * @return array{status:int,data:?array}|string array on an answer; 'secret_unreadable' or 'network' otherwise.
 	 */
-	private static function signed_post( string $route, array $payload ): ?array {
+	private static function signed_post( string $route, array $payload ) {
 		$s      = MasterPet_Settings::get();
 		$secret = MasterPet_Settings::secret();
-		if ( empty( $s['site_id'] ) || empty( $s['server'] ) || ! $secret ) {
-			return null;
+		if ( empty( $s['site_id'] ) || empty( $s['server'] ) ) {
+			return 'network';
+		}
+		if ( ! $secret ) {
+			return 'secret_unreadable';
 		}
 		$body  = wp_json_encode( $payload );
 		$ts    = (string) time();
@@ -96,14 +104,14 @@ final class MasterPet_Client {
 					'X-MP-Site'         => $s['site_id'],
 					'X-MP-Ts'           => $ts,
 					'X-MP-Nonce'        => $nonce,
-					'X-MP-Sig'          => MasterPet_Signature::sign( $secret, 'POST', $route, $ts, $nonce, $body ),
+					'X-MP-Sig'          => MasterPet_Signature::sign( $secret, 'POST', $route, $s['site_id'], $ts, $nonce, $body ),
 					'X-MP-Api-Version'  => self::API_VERSION,
 				),
 				'body'        => $body,
 			)
 		);
 		if ( is_wp_error( $res ) ) {
-			return null;
+			return 'network';
 		}
 		$data = json_decode( wp_remote_retrieve_body( $res ), true );
 		return array(
@@ -123,9 +131,9 @@ final class MasterPet_Client {
 			return self::message( 'disconnected' );
 		}
 		$r = self::signed_post( '/v1/heartbeat', self::versions() );
-		if ( null === $r ) {
-			MasterPet_Settings::update( array( 'last_error' => 'network' ) );
-			return self::message( 'network' );
+		if ( is_string( $r ) ) {
+			MasterPet_Settings::update( array( 'last_error' => $r ) );
+			return self::message( $r );
 		}
 		if ( 410 === $r['status'] ) {
 			// Disconnected from the MasterPet side: forget the secret.
@@ -149,10 +157,14 @@ final class MasterPet_Client {
 	}
 
 	/** Disconnect from this side. The local secret is forgotten even if MasterPet is unreachable. */
-	public static function disconnect(): void {
+	/** @return bool true when MasterPet confirmed the disconnect (or nothing was connected). */
+	public static function disconnect(): bool {
+		$told = true;
 		if ( MasterPet_Settings::is_connected() ) {
-			self::signed_post( '/v1/disconnect', array() );
+			$r    = self::signed_post( '/v1/disconnect', array() );
+			$told = is_array( $r ) && in_array( $r['status'], array( 200, 410 ), true );
 		}
 		MasterPet_Settings::clear();
+		return $told;
 	}
 }

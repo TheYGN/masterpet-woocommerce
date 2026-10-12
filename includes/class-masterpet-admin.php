@@ -55,8 +55,10 @@ final class MasterPet_Admin {
 
 	public static function handle_disconnect(): void {
 		self::guard( 'masterpet_disconnect' );
-		MasterPet_Client::disconnect();
-		self::back( 'האתר נותק מ-MasterPet.', 'success' );
+		if ( MasterPet_Client::disconnect() ) {
+			self::back( 'האתר נותק מ-MasterPet.', 'success' );
+		}
+		self::back( 'האתר נותק כאן, אבל MasterPet לא אישר. נתק גם במסך האינטגרציות ב-MasterPet, אחרת הסניף יישאר תפוס.', 'error' );
 	}
 
 	private static function since( int $ts ): string {

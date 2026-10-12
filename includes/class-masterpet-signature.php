@@ -4,7 +4,7 @@
  * tests/signature-vector.php can run it from the command line.
  *
  * Must match MasterPet's supabase/functions/_shared/woo-auth.ts exactly:
- *   base = METHOD \n route \n ts \n nonce \n sha256hex(body)
+ *   base = METHOD \n route \n site_id \n ts \n nonce \n sha256hex(body)
  *   sig  = hex(HMAC-SHA256(secret, base))
  *
  * @package MasterPet
@@ -25,12 +25,12 @@ final class MasterPet_Signature {
 	/**
 	 * The string that is signed.
 	 */
-	public static function base( string $method, string $route, string $ts, string $nonce, string $body ): string {
-		return implode( "\n", array( strtoupper( $method ), $route, $ts, $nonce, hash( 'sha256', $body ) ) );
+	public static function base( string $method, string $route, string $site_id, string $ts, string $nonce, string $body ): string {
+		return implode( "\n", array( strtoupper( $method ), $route, strtolower( $site_id ), $ts, $nonce, hash( 'sha256', $body ) ) );
 	}
 
-	public static function sign( string $secret, string $method, string $route, string $ts, string $nonce, string $body ): string {
-		return hash_hmac( 'sha256', self::base( $method, $route, $ts, $nonce, $body ), $secret );
+	public static function sign( string $secret, string $method, string $route, string $site_id, string $ts, string $nonce, string $body ): string {
+		return hash_hmac( 'sha256', self::base( $method, $route, $site_id, $ts, $nonce, $body ), $secret );
 	}
 
 	/** 32 hex characters, fits the 16..64 [A-Za-z0-9_-] rule on the server. */
