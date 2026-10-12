@@ -590,10 +590,11 @@ final class MasterPet_Sync {
 			// Last, so a product that fails above never downloads the image again on every retry.
 			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
 			// D-5a: categories and tags come from MasterPet, created here by name.
-			if ( isset( $item['categories'] ) && is_array( $item['categories'] ) ) {
+			// An empty list leaves the site's own categories alone (no "Uncategorized").
+			if ( ! empty( $item['categories'] ) && is_array( $item['categories'] ) ) {
 				$product->set_category_ids( self::term_ids( $item['categories'], 'product_cat' ) );
 			}
-			if ( isset( $item['tags'] ) && is_array( $item['tags'] ) ) {
+			if ( ! empty( $item['tags'] ) && is_array( $item['tags'] ) ) {
 				$product->set_tag_ids( self::term_ids( $item['tags'], 'product_tag' ) );
 			}
 			$product->set_status( $published ? 'publish' : 'draft' );
@@ -621,10 +622,14 @@ final class MasterPet_Sync {
 		}
 		$p->set_regular_price( self::price( $v ) );
 		// D-5a: the sale price lives in MasterPet (site only). None = no sale here.
-		$sale = self::sale_price( $v );
-		$p->set_sale_price( $sale );
-		$p->set_date_on_sale_from( '' !== $sale && ! empty( $v['sale_from'] ) ? strtotime( (string) $v['sale_from'] ) : '' );
-		$p->set_date_on_sale_to( '' !== $sale && ! empty( $v['sale_to'] ) ? strtotime( (string) $v['sale_to'] ) : '' );
+		// Only when MasterPet sends the field at all: an older MasterPet never
+		// erases a sale the owner set on the site.
+		if ( array_key_exists( 'sale_gross', $v ) ) {
+			$sale = self::sale_price( $v );
+			$p->set_sale_price( $sale );
+			$p->set_date_on_sale_from( '' !== $sale && ! empty( $v['sale_from'] ) ? strtotime( (string) $v['sale_from'] ) : '' );
+			$p->set_date_on_sale_to( '' !== $sale && ! empty( $v['sale_to'] ) ? strtotime( (string) $v['sale_to'] ) : '' );
+		}
 		// D-8: the connected branch's stock. manage_stock lets the site lower it between updates.
 		$p->set_manage_stock( true );
 		$p->set_stock_quantity( max( 0, (int) $v['qty'] ) );

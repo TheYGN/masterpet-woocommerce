@@ -115,9 +115,13 @@ final class MasterPet_Lock {
 				}
 			}
 		}
-		// D-5a: categories, tags and the sale price come from MasterPet too.
-		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id',
-			'category_ids', 'tag_ids', 'sale_price', 'date_on_sale_from', 'date_on_sale_to' );
+		// D-5a: categories and tags come from MasterPet too. The sale price only on
+		// the edit form and the REST API: WooCommerce's own scheduled-sales job
+		// starts and ends sales with a plain save, and must not be undone.
+		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id', 'category_ids', 'tag_ids' );
+		if ( $with_stock ) {
+			array_push( $keys, 'sale_price', 'date_on_sale_from', 'date_on_sale_to' );
+		}
 		foreach ( $keys as $key ) {
 			// A product in the trash stays there; the sync reports it and waits.
 			if ( 'status' === $key && 'trash' === $product->get_status( 'edit' ) ) {
