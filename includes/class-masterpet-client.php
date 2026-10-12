@@ -16,6 +16,7 @@ final class MasterPet_Client {
 		$map = array(
 			'code_invalid'           => 'הקוד לא תקין או שפג תוקפו. צור קוד חדש ב-MasterPet.',
 			'feature_off'            => 'המסלול של העסק ב-MasterPet לא כולל חיבור אתר.',
+			'tenant_has_site'        => 'לעסק הזה כבר מחובר אתר אחר ב-MasterPet. נתק אותו ב-MasterPet וצור קוד חדש.',
 			'branch_has_site'        => 'לסניף הזה כבר מחובר אתר אחר ב-MasterPet.',
 			'tenant_not_operational' => 'החשבון ב-MasterPet לא פעיל כרגע.',
 			'site_url_invalid'       => 'כתובת האתר חייבת לעבוד ב-https ולהיות כתובת ציבורית.',
