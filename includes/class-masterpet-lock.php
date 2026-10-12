@@ -36,6 +36,8 @@ final class MasterPet_Lock {
 		add_filter( 'woocommerce_rest_pre_insert_product_object', array( __CLASS__, 'on_rest_save' ) );
 		add_filter( 'woocommerce_rest_pre_insert_product_variation_object', array( __CLASS__, 'on_rest_save' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'notice' ) );
+		// A duplicate made on the site is the site's own product, not MasterPet's.
+		add_filter( 'woocommerce_duplicate_product_exclude_meta', array( __CLASS__, 'not_copied' ) );
 		add_action( 'admin_footer', array( __CLASS__, 'grey_out' ) );
 	}
 
@@ -74,27 +76,46 @@ final class MasterPet_Lock {
 		}
 	}
 
+	/** @param string[] $keys */
+	public static function not_copied( $keys ): array {
+		return array_merge( (array) $keys, array( '_masterpet_site', '_masterpet_product_id', '_masterpet_variant_id', self::META, '_masterpet_image_url' ) );
+	}
+
 	/**
-	 * Puts every locked field back to what MasterPet wrote. Compares the
-	 * product's CURRENT value, not only its pending changes: the WordPress edit
-	 * screen writes the title, content, status and featured image to the
-	 * database before WooCommerce loads the product, so those never show up as
-	 * changes (code review 12.10).
+	 * Puts every locked field back to what MasterPet wrote.
+	 * Name, SKU, regular price, description, status, image: compares the
+	 * CURRENT value with what MasterPet wrote. The WordPress edit screen writes
+	 * the title, content, status and featured image to the database before
+	 * WooCommerce loads the product, so those never show up as changes (code
+	 * review 12.10).
+	 * Stock: only a change in THIS save is put back, and to the value the
+	 * product had before it (not MasterPet's last number), because the site
+	 * itself lowers stock on every sale between updates (second review 12.10).
 	 */
 	private static function revert( WC_Product $product, bool $with_stock ): void {
-		if ( self::$writing || ! self::is_managed( $product ) ) {
+		if ( self::$writing || 0 === $product->get_id() || ! self::is_managed( $product ) ) {
 			return;
 		}
 		$snap = $product->get_meta( self::META );
 		if ( ! is_array( $snap ) ) {
 			return;
 		}
-		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id' );
 		if ( $with_stock ) {
-			$keys[] = 'manage_stock';
-			$keys[] = 'stock_quantity';
+			$changes = $product->get_changes();
+			$before  = $product->get_data(); // the values as loaded, before this save's changes
+			foreach ( array( 'manage_stock', 'stock_quantity' ) as $key ) {
+				if ( array_key_exists( $key, $changes ) && ! self::same( $key, $changes[ $key ], $before[ $key ] ?? null ) ) {
+					$setter = 'set_' . $key;
+					$product->{$setter}( $before[ $key ] ?? null );
+				}
+			}
 		}
+		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id' );
 		foreach ( $keys as $key ) {
+			// A product in the trash stays there; the sync reports it and waits.
+			if ( 'status' === $key && 'trash' === $product->get_status( 'edit' ) ) {
+				continue;
+			}
 			if ( ! array_key_exists( $key, $snap ) ) {
 				continue;
 			}
