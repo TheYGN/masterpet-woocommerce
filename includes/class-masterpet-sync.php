@@ -306,6 +306,14 @@ final class MasterPet_Sync {
 			$attrs = array( array( 'name' => 'וריאציה', 'values' => $values ) );
 		}
 
+		// Already here (a crash after an earlier create, before MasterPet heard of
+		// it, or the owner added it by hand): report the existing ids, never a twin.
+		$found = self::existing_by_sku( $variants );
+		if ( $found ) {
+			$report['created'][] = array_merge( array( 'product_id' => $pid ), $found );
+			return;
+		}
+
 		MasterPet_Lock::$writing = true;
 		$new_id = 0;
 		try {
@@ -375,6 +383,42 @@ final class MasterPet_Sync {
 		} finally {
 			MasterPet_Lock::$writing = false;
 		}
+	}
+
+	/**
+	 * The product on this site that already carries these SKUs, in the shape
+	 * /v1/created expects, or null. Simple: one variant whose SKU is a simple
+	 * product. Variable: every variant's SKU is a variation of the same parent.
+	 */
+	private static function existing_by_sku( array $variants ): ?array {
+		$first = wc_get_product_id_by_sku( (string) ( $variants[0]['sku'] ?? '' ) );
+		if ( ! $first ) {
+			return null;
+		}
+		$p = wc_get_product( $first );
+		if ( ! $p ) {
+			return null;
+		}
+		if ( $p->is_type( 'simple' ) && 1 === count( $variants ) ) {
+			return array(
+				'woo_product_id' => $p->get_id(),
+				'woo_type'       => 'simple',
+				'variations'     => array( array( 'variant_id' => (string) $variants[0]['variant_id'], 'woo_variation_id' => $p->get_id() ) ),
+			);
+		}
+		if ( ! $p->is_type( 'variation' ) ) {
+			return null;
+		}
+		$parent = $p->get_parent_id();
+		$links  = array();
+		foreach ( $variants as $v ) {
+			$id  = wc_get_product_id_by_sku( (string) $v['sku'] );
+			$var = $id ? wc_get_product( $id ) : null;
+			if ( $var && $var->is_type( 'variation' ) && $var->get_parent_id() === $parent ) {
+				$links[] = array( 'variant_id' => (string) $v['variant_id'], 'woo_variation_id' => $var->get_id() );
+			}
+		}
+		return $links ? array( 'woo_product_id' => $parent, 'woo_type' => 'variable', 'variations' => $links ) : null;
 	}
 
 	/**
