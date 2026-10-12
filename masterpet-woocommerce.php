@@ -3,7 +3,7 @@
  * Plugin Name:       MasterPet for WooCommerce
  * Plugin URI:        https://github.com/TheYGN/masterpet-woocommerce
  * Description:       מחבר את חנות WooCommerce ל-MasterPet: המוצרים מגיעים מ-MasterPet וההזמנות מנוהלות שם.
- * Version:           0.1.1
+ * Version:           0.2.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Requires Plugins:  woocommerce
@@ -19,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MASTERPET_WC_VERSION', '0.1.1' );
+define( 'MASTERPET_WC_VERSION', '0.2.0' );
 define( 'MASTERPET_WC_FILE', __FILE__ );
 define( 'MASTERPET_WC_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -27,6 +27,9 @@ require_once MASTERPET_WC_DIR . 'includes/class-masterpet-signature.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-settings.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-client.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-admin.php';
+require_once MASTERPET_WC_DIR . 'includes/class-masterpet-rest.php';
+require_once MASTERPET_WC_DIR . 'includes/class-masterpet-sync.php';
+require_once MASTERPET_WC_DIR . 'includes/class-masterpet-lock.php';
 
 // WooCommerce High-Performance Order Storage and block checkout (PRD #13.1 §4).
 add_action(
@@ -40,9 +43,13 @@ add_action(
 );
 
 add_action( 'plugins_loaded', array( 'MasterPet_Admin', 'init' ) );
+// Products (PRD #13.1 phase B): the doorbell, the pull, the locked fields.
+add_action( 'plugins_loaded', array( 'MasterPet_Rest', 'init' ) );
+add_action( 'plugins_loaded', array( 'MasterPet_Sync', 'init' ) );
+add_action( 'plugins_loaded', array( 'MasterPet_Lock', 'init' ) );
 
-// Best-effort hourly heartbeat. WP-Cron runs only on visits; the real health
-// clock lives in MasterPet (PRD #13.1 D-14) and arrives in phase B.
+// Best-effort hourly heartbeat. WP-Cron runs only on visits; the real clock
+// lives in MasterPet (PRD #13.1 D-14) and rings masterpet/v1/doorbell.
 add_action( 'masterpet_wc_heartbeat', array( 'MasterPet_Client', 'heartbeat' ) );
 
 register_activation_hook(
@@ -58,5 +65,8 @@ register_deactivation_hook(
 	__FILE__,
 	static function () {
 		wp_clear_scheduled_hook( 'masterpet_wc_heartbeat' );
+		if ( function_exists( 'as_unschedule_all_actions' ) ) {
+			as_unschedule_all_actions( 'masterpet_wc_sync', array(), 'masterpet' );
+		}
 	}
 );
