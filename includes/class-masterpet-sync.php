@@ -28,6 +28,10 @@ final class MasterPet_Sync {
 	const CONTINUE_LINK = 'continue';
 	const DESC_MAX      = 20000; // the same cap as MasterPet, so a long text is never cut short
 	const LINK_BYTES    = 600000; // a link-report request stays well under MasterPet's 1 MB
+	const BUDGET        = 20;     // seconds of work per job, then it reschedules itself
+
+	/** When this job started (microtime). */
+	private static $started = 0.0;
 
 	public static function init(): void {
 		add_action( self::HOOK, array( __CLASS__, 'run' ) );
@@ -58,6 +62,7 @@ final class MasterPet_Sync {
 			return;
 		}
 		set_transient( self::LOCK, 1, 10 * MINUTE_IN_SECONDS );
+		self::$started = microtime( true );
 		try {
 			$more = false;
 			$s    = MasterPet_Settings::get();
@@ -85,6 +90,16 @@ final class MasterPet_Sync {
 		if ( true === $more ) {
 			self::schedule( true );
 		}
+	}
+
+	/**
+	 * True once this job has worked BUDGET seconds. Shared hosts end a PHP run
+	 * at 30 to 300 seconds, and a job cut off that way never reschedules itself
+	 * (the conversion stopped after 3 rounds on the test site, 13.10); stopping
+	 * early and rescheduling keeps the chain going without a new doorbell.
+	 */
+	public static function over_budget(): bool {
+		return self::$started > 0 && microtime( true ) - self::$started > self::BUDGET;
 	}
 
 	private static function note_error( string $code ): void {
@@ -248,6 +263,11 @@ final class MasterPet_Sync {
 			$items = is_array( $r['data']['items'] ?? null ) ? $r['data']['items'] : array();
 			$ack   = array( 'done' => array(), 'failed' => array(), 'missing' => array(), 'missing_variations' => array() );
 			foreach ( $items as $item ) {
+				// Out of time: what is not written stays leased in MasterPet and
+				// comes back on a later pull.
+				if ( self::over_budget() ) {
+					break;
+				}
 				self::apply( $item, $ack );
 			}
 			if ( $items ) {
@@ -281,6 +301,9 @@ final class MasterPet_Sync {
 					'sync_error' => $any_failed ? 'some_failed' : '',
 				)
 			);
+			if ( self::over_budget() ) {
+				return true;
+			}
 			if ( empty( $r['data']['has_more'] ) ) {
 				return false;
 			}

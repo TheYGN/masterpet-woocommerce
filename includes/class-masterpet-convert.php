@@ -48,7 +48,12 @@ final class MasterPet_Convert {
 
 		$missing = array();
 		$items   = array();
+		$tried   = 0;
 		foreach ( array_slice( $ids, 0, self::PER_RUN ) as $id ) {
+			if ( $tried > 0 && MasterPet_Sync::over_budget() ) {
+				break; // the rest on the next job
+			}
+			$tried++;
 			$done = self::convert( $id );
 			if ( null === $done ) {
 				continue;
@@ -61,6 +66,8 @@ final class MasterPet_Convert {
 			// is set only when a scan finds none (review 13.10).
 			return false;
 		}
+		// From here the batch is reported even past the budget: a converted
+		// product must be re-linked in the same job.
 
 		$a = MasterPet_Client::call( '/v1/ack', array( 'done' => array(), 'failed' => array(), 'missing' => $missing, 'missing_variations' => array() ) );
 		if ( is_string( $a ) || 200 !== $a['status'] ) {
@@ -70,7 +77,7 @@ final class MasterPet_Convert {
 		if ( is_string( $l ) || 200 !== $l['status'] ) {
 			return is_string( $l ) ? $l : (string) ( $l['data']['error'] ?? 'http_' . $l['status'] );
 		}
-		return count( $ids ) > self::PER_RUN;
+		return count( $ids ) > count( $items );
 	}
 
 	/** Ids of products this plugin created that are variable with exactly one variation. */
