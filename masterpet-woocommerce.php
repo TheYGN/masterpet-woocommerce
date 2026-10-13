@@ -3,7 +3,7 @@
  * Plugin Name:       MasterPet for WooCommerce
  * Plugin URI:        https://github.com/TheYGN/masterpet-woocommerce
  * Description:       מחבר את חנות WooCommerce ל-MasterPet: המוצרים מגיעים מ-MasterPet וההזמנות מנוהלות שם.
- * Version:           0.4.0
+ * Version:           0.5.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Requires Plugins:  woocommerce
@@ -19,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MASTERPET_WC_VERSION', '0.4.0' );
+define( 'MASTERPET_WC_VERSION', '0.5.0' );
 define( 'MASTERPET_WC_FILE', __FILE__ );
 define( 'MASTERPET_WC_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -30,6 +30,7 @@ require_once MASTERPET_WC_DIR . 'includes/class-masterpet-admin.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-rest.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-sync.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-lock.php';
+require_once MASTERPET_WC_DIR . 'includes/class-masterpet-convert.php';
 
 // WooCommerce High-Performance Order Storage and block checkout (PRD #13.1 §4).
 add_action(

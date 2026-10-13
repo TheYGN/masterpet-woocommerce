@@ -68,6 +68,16 @@ final class MasterPet_Sync {
 				self::note_error( (string) $link );
 			} else {
 				$more = self::pull();
+				// T-299: once the queue is empty, turn this plugin's single-variation
+				// products into simple ones (a one-time repair, 20 per job).
+				if ( false === $more ) {
+					$c = MasterPet_Convert::run();
+					if ( is_string( $c ) ) {
+						self::note_error( $c );
+					} else {
+						$more = $c;
+					}
+				}
 			}
 		} finally {
 			delete_transient( self::LOCK );
