@@ -55,6 +55,11 @@ final class MasterPet_Lock {
 			return;
 		}
 		$snap = array(
+			'category_ids'      => $product->get_category_ids( 'edit' ),
+			'tag_ids'           => $product->get_tag_ids( 'edit' ),
+			'sale_price'        => $product->get_sale_price( 'edit' ),
+			'date_on_sale_from' => self::ts( $product->get_date_on_sale_from( 'edit' ) ),
+			'date_on_sale_to'   => self::ts( $product->get_date_on_sale_to( 'edit' ) ),
 			'name'           => $product->get_name( 'edit' ),
 			'sku'            => $product->get_sku( 'edit' ),
 			'regular_price'  => $product->get_regular_price( 'edit' ),
@@ -110,7 +115,13 @@ final class MasterPet_Lock {
 				}
 			}
 		}
-		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id' );
+		// D-5a: categories and tags come from MasterPet too. The sale price only on
+		// the edit form and the REST API: WooCommerce's own scheduled-sales job
+		// starts and ends sales with a plain save, and must not be undone.
+		$keys = array( 'name', 'sku', 'regular_price', 'description', 'status', 'image_id', 'category_ids', 'tag_ids' );
+		if ( $with_stock ) {
+			array_push( $keys, 'sale_price', 'date_on_sale_from', 'date_on_sale_to' );
+		}
 		foreach ( $keys as $key ) {
 			// A product in the trash stays there; the sync reports it and waits.
 			if ( 'status' === $key && 'trash' === $product->get_status( 'edit' ) ) {
@@ -121,20 +132,45 @@ final class MasterPet_Lock {
 			}
 			$getter = 'get_' . $key;
 			$now    = $product->{$getter}( 'edit' );
+			if ( 'date_on_sale_from' === $key || 'date_on_sale_to' === $key ) {
+				$now = self::ts( $now );
+			}
 			if ( self::same( $key, $now, $snap[ $key ] ) ) {
 				continue;
 			}
 			$setter = 'set_' . $key;
+			$value  = $snap[ $key ];
+			if ( ( 'date_on_sale_from' === $key || 'date_on_sale_to' === $key ) ) {
+				$value = '' === (string) $value ? '' : (int) $value;
+			}
 			try {
-				$product->{$setter}( $snap[ $key ] );
+				$product->{$setter}( $value );
 			} catch ( Throwable $e ) {
 				continue; // e.g. the SKU is taken now; the next sync reports it
 			}
 		}
 	}
 
-	/** Prices as numbers, everything else as exact strings (never PHP's loose ==). */
+	/** A WC_DateTime (or nothing) as a unix time string, '' for none. */
+	private static function ts( $d ): string {
+		return $d instanceof WC_DateTime ? (string) $d->getTimestamp() : '';
+	}
+
+	/** Prices as numbers, term lists as sets, everything else as exact strings (never PHP's loose ==). */
 	private static function same( string $key, $a, $b ): bool {
+		if ( 'category_ids' === $key || 'tag_ids' === $key ) {
+			$a = array_map( 'intval', (array) $a );
+			$b = array_map( 'intval', (array) $b );
+			sort( $a );
+			sort( $b );
+			return $a === $b;
+		}
+		if ( 'sale_price' === $key && ( '' === (string) $a || '' === (string) $b ) ) {
+			return (string) $a === (string) $b;
+		}
+		if ( 'sale_price' === $key ) {
+			return wc_format_decimal( $a, wc_get_price_decimals() ) === wc_format_decimal( $b, wc_get_price_decimals() );
+		}
 		if ( 'regular_price' === $key || 'stock_quantity' === $key ) {
 			if ( '' === (string) $a || '' === (string) $b || null === $a || null === $b ) {
 				return (string) $a === (string) $b;
@@ -184,7 +220,7 @@ final class MasterPet_Lock {
 		if ( ! $product || ! self::is_managed( $product ) ) {
 			return;
 		}
-		echo '<div class="notice notice-info"><p>' . esc_html( 'המוצר מנוהל ב-MasterPet: שם, מק"ט, מחיר רגיל, מלאי, תיאור, סטטוס ותמונה ראשית מתעדכנים משם, ושינוי שלהם כאן לא יישמר. מחיר מבצע, גלריה, תיאור קצר וקידום פתוחים לעריכה.' ) . '</p></div>';
+		echo '<div class="notice notice-info"><p>' . esc_html( 'המוצר מנוהל ב-MasterPet: שם, מק"ט, מחיר רגיל ומחיר מבצע, מלאי, תיאור, סטטוס, קטגוריות, תגיות ותמונה ראשית מתעדכנים משם, ושינוי שלהם כאן לא יישמר. גלריה, תיאור קצר וקידום פתוחים לעריכה.' ) . '</p></div>';
 	}
 
 	public static function grey_out(): void {
@@ -196,11 +232,11 @@ final class MasterPet_Lock {
 <script>
 jQuery(function ($) {
 	var lock = function () {
-		$('#title, #_sku, #_regular_price, #_stock, input[name^="variable_sku"], input[name^="variable_regular_price"], input[name^="variable_stock"]')
+		$('#title, #_sku, #_regular_price, #_sale_price, #_stock, input[name^="variable_sku"], input[name^="variable_regular_price"], input[name^="variable_sale_price"], input[name^="variable_stock"]')
 			.prop('readonly', true).css('background', '#f0f0f1');
 		$('#_manage_stock, input[name^="variable_manage_stock"], input[name^="variable_enabled"]').prop('disabled', true);
 		// Description, status and the main image are put back on save; greyed so the owner sees it first.
-		$('#postdivrich, #submitdiv .misc-pub-post-status, #postimagediv').css({ opacity: 0.6, 'pointer-events': 'none' });
+		$('#postdivrich, #submitdiv .misc-pub-post-status, #postimagediv, #product_catdiv, #tagsdiv-product_tag').css({ opacity: 0.6, 'pointer-events': 'none' });
 	};
 	lock();
 	$('#woocommerce-product-data').on('woocommerce_variations_loaded', lock);

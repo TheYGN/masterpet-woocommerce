@@ -480,6 +480,46 @@ final class MasterPet_Sync {
 		return $links ? array( 'woo_product_id' => $parent, 'woo_type' => 'variable', 'variations' => $links ) : null;
 	}
 
+	/** The sale price in the same tax mode as the regular price, or '' for none. */
+	private static function sale_price( array $v ): string {
+		if ( ! isset( $v['sale_gross'] ) || null === $v['sale_gross'] ) {
+			return '';
+		}
+		$gross = ! wc_tax_enabled() || wc_prices_include_tax();
+		return wc_format_decimal( $gross ? $v['sale_gross'] : $v['sale_net'] );
+	}
+
+	/**
+	 * Term ids for these names in $taxonomy, creating the missing terms (top
+	 * level). Names are plain text; at most 50, each up to 200 characters.
+	 *
+	 * @param array<int,mixed> $names
+	 * @return int[]
+	 */
+	private static function term_ids( array $names, string $taxonomy ): array {
+		$ids = array();
+		foreach ( array_slice( $names, 0, 50 ) as $raw ) {
+			$name = mb_substr( sanitize_text_field( (string) $raw ), 0, 200 );
+			if ( '' === $name ) {
+				continue;
+			}
+			$found = term_exists( $name, $taxonomy );
+			if ( ! $found ) {
+				$found = wp_insert_term( $name, $taxonomy );
+			}
+			if ( is_wp_error( $found ) ) {
+				// Two runs creating the same term at once: the other one won.
+				$tid = (int) $found->get_error_data( 'term_exists' );
+				if ( $tid ) {
+					$ids[] = $tid;
+				}
+				continue;
+			}
+			$ids[] = (int) ( is_array( $found ) ? $found['term_id'] : $found );
+		}
+		return array_values( array_unique( $ids ) );
+	}
+
 	/**
 	 * FR-12. With WooCommerce tax off (common in Israel: prices typed with VAT),
 	 * the price on the site is what the customer pays, so it gets the gross.
@@ -549,6 +589,14 @@ final class MasterPet_Sync {
 
 			// Last, so a product that fails above never downloads the image again on every retry.
 			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
+			// D-5a: categories and tags come from MasterPet, created here by name.
+			// An empty list leaves the site's own categories alone (no "Uncategorized").
+			if ( ! empty( $item['categories'] ) && is_array( $item['categories'] ) ) {
+				$product->set_category_ids( self::term_ids( $item['categories'], 'product_cat' ) );
+			}
+			if ( ! empty( $item['tags'] ) && is_array( $item['tags'] ) ) {
+				$product->set_tag_ids( self::term_ids( $item['tags'], 'product_tag' ) );
+			}
 			$product->set_status( $published ? 'publish' : 'draft' );
 			$product->update_meta_data( '_masterpet_site', $site_id );
 			$product->update_meta_data( '_masterpet_product_id', $pid );
@@ -573,6 +621,15 @@ final class MasterPet_Sync {
 			$p->set_sku( $sku ); // throws WC_Data_Exception when another product already uses it
 		}
 		$p->set_regular_price( self::price( $v ) );
+		// D-5a: the sale price lives in MasterPet (site only). None = no sale here.
+		// Only when MasterPet sends the field at all: an older MasterPet never
+		// erases a sale the owner set on the site.
+		if ( array_key_exists( 'sale_gross', $v ) ) {
+			$sale = self::sale_price( $v );
+			$p->set_sale_price( $sale );
+			$p->set_date_on_sale_from( '' !== $sale && ! empty( $v['sale_from'] ) ? strtotime( (string) $v['sale_from'] ) : '' );
+			$p->set_date_on_sale_to( '' !== $sale && ! empty( $v['sale_to'] ) ? strtotime( (string) $v['sale_to'] ) : '' );
+		}
 		// D-8: the connected branch's stock. manage_stock lets the site lower it between updates.
 		$p->set_manage_stock( true );
 		$p->set_stock_quantity( max( 0, (int) $v['qty'] ) );
