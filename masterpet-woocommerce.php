@@ -3,7 +3,7 @@
  * Plugin Name:       MasterPet for WooCommerce
  * Plugin URI:        https://github.com/TheYGN/masterpet-woocommerce
  * Description:       מחבר את חנות WooCommerce ל-MasterPet: המוצרים מגיעים מ-MasterPet וההזמנות מנוהלות שם.
- * Version:           0.5.0
+ * Version:           0.5.1
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Requires Plugins:  woocommerce
@@ -19,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MASTERPET_WC_VERSION', '0.5.0' );
+define( 'MASTERPET_WC_VERSION', '0.5.1' );
 define( 'MASTERPET_WC_FILE', __FILE__ );
 define( 'MASTERPET_WC_DIR', plugin_dir_path( __FILE__ ) );
 
