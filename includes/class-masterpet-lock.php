@@ -83,7 +83,7 @@ final class MasterPet_Lock {
 
 	/** @param string[] $keys */
 	public static function not_copied( $keys ): array {
-		return array_merge( (array) $keys, array( '_masterpet_site', '_masterpet_product_id', '_masterpet_variant_id', self::META, '_masterpet_image_url' ) );
+		return array_merge( (array) $keys, array( '_masterpet_site', '_masterpet_product_id', '_masterpet_variant_id', '_masterpet_pending', self::META, '_masterpet_image_url' ) );
 	}
 
 	/**

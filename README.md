@@ -48,6 +48,8 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    regular pull. A product turned off in MasterPet becomes a draft here.
    Categories, tags and the sale price (fixed or scheduled) come from MasterPet
    too (0.4.0); a product with one variant is created as a simple product.
+   Products created before 0.4.0 with a single variation are turned into
+   simple products in place, once, and linked again by SKU (0.5.0).
 4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
    short description and SEO stay open. Disconnecting releases the lock.

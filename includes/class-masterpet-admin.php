@@ -77,6 +77,16 @@ final class MasterPet_Admin {
 		self::back( 'הקישור לפי מק"ט רץ שוב. מוצרים שכבר מקושרים לא משתנים.', 'success' );
 	}
 
+	/** The site's clock runs on Israel time now (a named zone or a +2/+3 offset that matches it). */
+	private static function israel_time(): bool {
+		$tz = wp_timezone();
+		if ( in_array( $tz->getName(), array( 'Asia/Jerusalem', 'Asia/Tel_Aviv', 'Israel' ), true ) ) {
+			return true;
+		}
+		$now = new DateTimeImmutable( 'now' );
+		return $tz->getOffset( $now ) === ( new DateTimeZone( 'Asia/Jerusalem' ) )->getOffset( $now );
+	}
+
 	/** Sync error codes → what the store owner reads. */
 	private static function sync_error( string $code ): string {
 		$map = array(
@@ -156,6 +166,11 @@ final class MasterPet_Admin {
 		echo '</tbody></table>';
 		if ( ! empty( $s['sync_error'] ) ) {
 			echo '<div class="notice notice-warning inline"><p>' . esc_html( self::sync_error( (string) $s['sync_error'] ) ) . '</p></div>';
+		}
+		// MasterPet's sale dates are Israel days. With the site on another time zone
+		// (WordPress starts on UTC) the product screen shows them a day early.
+		if ( ! self::israel_time() ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html( 'אזור הזמן של האתר אינו ישראל, ולכן תאריכי המבצעים והשעות של ההזמנות מוצגים כאן ביום או בשעות הלא נכונים. כדאי לשנות בהגדרות ← כללי ← אזור זמן ל"ירושלים".' ) . '</p></div>';
 		}
 		echo '<p class="description">' . esc_html( 'מוצרים באתר בלי מק"ט תואם ב-MasterPet לא משתנים. ההזמנות יחוברו בעדכון הבא של התוסף.' ) . '</p>';
 
