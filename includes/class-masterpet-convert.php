@@ -15,8 +15,12 @@
  * "missing" (its type no longer matches) and MasterPet's creation path finds
  * it by SKU and links it again, so nothing is left orphaned.
  *
- * Only products this plugin created (meta _masterpet_pending) and that have
- * exactly one variation. A store's own variable products are never touched.
+ * Only products this plugin created for this connection and that MasterPet
+ * already linked and filled (_masterpet_pending = _masterpet_product_id, the
+ * same _masterpet_site), with exactly one variation. A store's own variable
+ * products, and duplicates made on the site, are never touched.
+ * Past orders keep their line items, but those point at the removed variation
+ * (accepted, review 13.10: only test sites carry such products).
  *
  * @package MasterPet
  */
@@ -53,8 +57,8 @@ final class MasterPet_Convert {
 			$items[]   = $done['item'];
 		}
 		if ( ! $items ) {
-			// Nothing convertible after all (each one refused): stop scanning.
-			MasterPet_Settings::update( array( 'single_converted' => time() ) );
+			// Every one of this batch failed: try again on a later pull. The flag
+			// is set only when a scan finds none (review 13.10).
 			return false;
 		}
 
@@ -81,14 +85,23 @@ final class MasterPet_Convert {
 				'meta_compare' => 'EXISTS',
 			)
 		);
-		$out = array();
+		$site = (string) ( MasterPet_Settings::get()['site_id'] ?? '' );
+		$out  = array();
 		foreach ( $ids as $id ) {
 			$p = wc_get_product( $id );
-			if ( $p && $p->is_type( 'variable' ) && 1 === count( $p->get_children() ) ) {
+			if ( $p && $p->is_type( 'variable' ) && 1 === count( $p->get_children() ) && self::ours( $p, $site ) ) {
 				$out[] = (int) $id;
 			}
 		}
 		return $out;
+	}
+
+	/** Created here for this connection, and MasterPet has linked and filled it since. */
+	private static function ours( WC_Product $p, string $site ): bool {
+		$pending = (string) $p->get_meta( '_masterpet_pending' );
+		return '' !== $site && '' !== $pending
+			&& $pending === (string) $p->get_meta( '_masterpet_product_id' )
+			&& $site === (string) $p->get_meta( '_masterpet_site' );
 	}
 
 	/**
@@ -101,7 +114,8 @@ final class MasterPet_Convert {
 		$children = $parent ? $parent->get_children() : array();
 		$var      = 1 === count( $children ) ? wc_get_product( (int) $children[0] ) : null;
 		$pid      = $parent ? (string) $parent->get_meta( '_masterpet_pending' ) : '';
-		if ( ! $parent || ! $parent->is_type( 'variable' ) || ! $var || ! $var->is_type( 'variation' ) || '' === $pid ) {
+		$site     = (string) ( MasterPet_Settings::get()['site_id'] ?? '' );
+		if ( ! $parent || ! $parent->is_type( 'variable' ) || ! $var || ! $var->is_type( 'variation' ) || ! self::ours( $parent, $site ) ) {
 			return null;
 		}
 
@@ -121,7 +135,17 @@ final class MasterPet_Convert {
 			'height'            => $var->get_height( 'edit' ),
 			'variant_id'        => (string) $var->get_meta( '_masterpet_variant_id' ),
 			'image_id'          => (int) $var->get_image_id( 'edit' ),
+			'tax_class'         => $var->get_tax_class( 'edit' ),
+			'shipping_class_id' => (int) $var->get_shipping_class_id( 'edit' ),
 		);
+		// "Same as parent" (a variation that took its stock from the product).
+		if ( 'parent' === $keep['manage_stock'] ) {
+			$keep['manage_stock']   = $parent->get_manage_stock( 'edit' );
+			$keep['stock_quantity'] = $parent->get_stock_quantity( 'edit' );
+		}
+		if ( 'parent' === $keep['tax_class'] ) {
+			$keep['tax_class'] = $parent->get_tax_class( 'edit' );
+		}
 		// Attributes stay as plain product details, not as a choice; the made-up
 		// "וריאציה" one (its value was the SKU) goes.
 		$attrs = array();
@@ -137,7 +161,8 @@ final class MasterPet_Convert {
 		try {
 			// The variation goes first: its SKU must be free before the product takes it.
 			$var->delete( true );
-			wp_set_object_terms( $id, 'simple', 'product_type' );
+			// The type itself changes on save() (WooCommerce sets the term and fires
+			// woocommerce_product_type_changed), as in WooCommerce's own editor.
 			if ( class_exists( 'WC_Cache_Helper' ) ) {
 				WC_Cache_Helper::invalidate_cache_group( 'product_' . $id );
 			}
@@ -159,6 +184,8 @@ final class MasterPet_Convert {
 			$p->set_length( $keep['length'] );
 			$p->set_width( $keep['width'] );
 			$p->set_height( $keep['height'] );
+			$p->set_tax_class( (string) $keep['tax_class'] );
+			$p->set_shipping_class_id( $keep['shipping_class_id'] );
 			if ( ! $p->get_image_id( 'edit' ) && $keep['image_id'] ) {
 				$p->set_image_id( $keep['image_id'] );
 			}
@@ -169,8 +196,10 @@ final class MasterPet_Convert {
 			wc_delete_product_transients( $id );
 			MasterPet_Lock::remember( wc_get_product( $id ) );
 		} catch ( Throwable $e ) {
-			// Half-way (the variation is already gone): the next pull reports it
-			// missing and MasterPet links it again by SKU. Nothing to undo here.
+			// Half-way, the variation may already be gone: take the product off the
+			// storefront so nobody buys it without a price. MasterPet's next change
+			// to it reports it missing, and the creation path links it again.
+			wp_update_post( array( 'ID' => $id, 'post_status' => 'draft' ) );
 			return null;
 		} finally {
 			MasterPet_Lock::$writing = false;
