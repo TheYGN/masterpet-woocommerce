@@ -1,0 +1,39 @@
+name: promote
+
+# Gives a release that test sites already run to every site (PRD #13.1 D-35):
+# turns the pre-release into a regular release. Run it from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote, e.g. 0.7.0 (empty = the newest pre-release)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION" ]; then
+            tag="v${VERSION#v}"
+          else
+            tag=$(gh release list -R "$GITHUB_REPOSITORY" --limit 20 --json tagName,isPrerelease \
+              --jq '[.[] | select(.isPrerelease)][0].tagName // empty')
+          fi
+          if [ -z "$tag" ]; then
+            echo "::error::No pre-release to promote"
+            exit 1
+          fi
+          published=$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt)
+          echo "Promoting $tag, on test sites since $published"
+          gh release edit "$tag" -R "$GITHUB_REPOSITORY" --prerelease=false --latest

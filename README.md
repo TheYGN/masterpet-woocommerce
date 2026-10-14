@@ -60,6 +60,24 @@ Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real
 site. It refuses private and internal addresses and never follows redirects.
 
+## Updates (0.7.0)
+
+The plugin updates itself from this repository's GitHub releases, like any
+plugin from wordpress.org: "update available" on the plugins screen, the update
+button, and automatic updates (on by default; the owner can turn them off).
+
+1. Merging a change that raises the version (the `Version:` header and
+   `MASTERPET_WC_VERSION`, kept equal by the checks) publishes it as a GitHub
+   **pre-release** with `masterpet-woocommerce.zip` (`.github/workflows/release.yml`).
+2. Only sites marked **test site** (MasterPet screen → Updates) get
+   pre-releases.
+3. After a few days on the test site, run **promote** from the Actions tab
+   (`.github/workflows/promote.yml`). The release becomes a regular one and
+   every site gets it.
+
+A site asks GitHub at most every 6 hours, without a token. Packages are taken
+only from this repository's release downloads.
+
 ## Security
 
 - Every request between the site and MasterPet is signed:
