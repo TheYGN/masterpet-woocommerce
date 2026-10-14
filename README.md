@@ -60,6 +60,14 @@ Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real
 site. It refuses private and internal addresses and never follows redirects.
 
+## The MasterPet screen (0.7.1)
+
+The plugin's screen in WordPress uses MasterPet's own look (the masterpet repo,
+`designs/DESIGN-SYSTEM.md`): the brand green, Heebo, rounded cards, pill
+buttons. The styles live in `assets/admin.css`, scoped under `.mp` and loaded
+on this screen only, with Heebo from Google Fonts. Icons are inline Material
+Symbols, so nothing else loads.
+
 ## Updates (0.7.0)
 
 The plugin updates itself from this repository's GitHub releases, like any
