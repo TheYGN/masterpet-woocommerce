@@ -12,6 +12,8 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 delete_option( 'masterpet_wc_connection' );
 delete_option( 'masterpet_wc_test_site' );
 delete_option( 'masterpet_wc_auto_update_on' );
+delete_option( 'masterpet_wc_self_update_last' );
+wp_clear_scheduled_hook( 'masterpet_wc_self_update' );
 delete_transient( 'masterpet_wc_release_test' );
 delete_transient( 'masterpet_wc_release_stable' );
 wp_clear_scheduled_hook( 'masterpet_wc_heartbeat' );
