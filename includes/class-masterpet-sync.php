@@ -606,6 +606,11 @@ final class MasterPet_Sync {
 				$product->update_meta_data( '_masterpet_variant_id', (string) $v['variant_id'] );
 			} else {
 				foreach ( $variants as $v ) {
+					// Each variation may download an image: out of time, this product is
+					// retried later (written variations and downloaded images are kept).
+					if ( self::over_budget() ) {
+						throw new RuntimeException( 'time_budget' );
+					}
 					$var = wc_get_product( (int) $v['woo_variation_id'] );
 					if ( ! $var || $var->get_parent_id() !== $product->get_id() ) {
 						$ack['missing_variations'][] = array( 'variant_id' => (string) $v['variant_id'] );
