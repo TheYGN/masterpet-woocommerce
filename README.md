@@ -52,6 +52,8 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    simple products in place, once, and linked again by SKU (0.5.0).
    A variant's own image in MasterPet goes to its variation here; without
    one the variation shows the product image (0.6.0).
+   A variant added in MasterPet to a product already on the site becomes a
+   new variation here, linked by SKU (0.8.0).
 4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
    short description and SEO stay open. Disconnecting releases the lock.

@@ -262,18 +262,29 @@ final class MasterPet_Sync {
 			}
 			$items = is_array( $r['data']['items'] ?? null ) ? $r['data']['items'] : array();
 			$ack   = array( 'done' => array(), 'failed' => array(), 'missing' => array(), 'missing_variations' => array() );
+			$new_links = array();
 			foreach ( $items as $item ) {
 				// Out of time: what is not written stays leased in MasterPet and
 				// comes back on a later pull.
 				if ( self::over_budget() ) {
 					break;
 				}
-				self::apply( $item, $ack );
+				self::apply( $item, $ack, $new_links );
 			}
 			if ( $items ) {
 				$a = MasterPet_Client::call( '/v1/ack', $ack );
 				if ( is_string( $a ) || 200 !== $a['status'] ) {
 					$code = is_string( $a ) ? $a : (string) ( $a['data']['error'] ?? 'http_' . $a['status'] );
+					self::note_error( $code );
+					return $code;
+				}
+			}
+			// T-305: variations created here for variants new in MasterPet are linked
+			// by SKU; MasterPet then sends them through the regular path (price, stock).
+			if ( $new_links ) {
+				$l = MasterPet_Client::call( '/v1/link-report', array( 'items' => $new_links, 'done' => false ) );
+				if ( is_string( $l ) || 200 !== $l['status'] ) {
+					$code = is_string( $l ) ? $l : (string) ( $l['data']['error'] ?? 'http_' . $l['status'] );
 					self::note_error( $code );
 					return $code;
 				}
@@ -566,7 +577,7 @@ final class MasterPet_Sync {
 	/**
 	 * Writes one product snapshot. Fills $ack.
 	 */
-	private static function apply( array $item, array &$ack ): void {
+	private static function apply( array $item, array &$ack, array &$new_links ): void {
 		$pid     = (string) ( $item['product_id'] ?? '' );
 		$version = $item['version'] ?? null;
 		$woo_id  = (int) ( $item['woo_product_id'] ?? 0 );
@@ -626,6 +637,11 @@ final class MasterPet_Sync {
 				}
 			}
 
+			// T-305: variants added in MasterPet after this product went up.
+			if ( 'variable' === $type && ! empty( $item['new_variants'] ) && is_array( $item['new_variants'] ) ) {
+				self::add_variations( $product, $item['new_variants'], $new_links );
+			}
+
 			// Last, so a product that fails above never downloads the image again on every retry.
 			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
 			// D-5a: categories and tags come from MasterPet, created here by name.
@@ -672,6 +688,89 @@ final class MasterPet_Sync {
 		// D-8: the connected branch's stock. manage_stock lets the site lower it between updates.
 		$p->set_manage_stock( true );
 		$p->set_stock_quantity( max( 0, (int) $v['qty'] ) );
+	}
+
+	/**
+	 * T-305: a variation for each variant MasterPet added to this (variable)
+	 * product. The attribute value is added to the parent's options first (a
+	 * value missing there cannot be picked on the storefront), then the
+	 * variation is created by SKU (reused if it is already there) and queued for
+	 * /v1/link-report, which links it and makes MasterPet send its price and
+	 * stock. A variant still without attribute values waits (MasterPet sends the
+	 * product again once they are linked); a variant of an attribute the
+	 * product does not have here (a new dimension) is skipped.
+	 */
+	private static function add_variations( WC_Product $product, array $new, array &$new_links ): void {
+		$attrs   = $product->get_attributes();
+		$by_name = array();
+		foreach ( $attrs as $key => $a ) {
+			if ( $a instanceof WC_Product_Attribute && $a->get_variation() ) {
+				$by_name[ $a->get_name() ] = $key;
+			}
+		}
+		$made_up = isset( $by_name['וריאציה'] ); // created with the SKU as the value (no attributes in MasterPet)
+		$ready   = array();
+		foreach ( $new as $v ) {
+			$sku = (string) ( $v['sku'] ?? '' );
+			if ( '' === $sku || empty( $v['variant_id'] ) ) {
+				continue;
+			}
+			$va = is_array( $v['attributes'] ?? null ) ? $v['attributes'] : array();
+			if ( ! $va && $made_up ) {
+				$va = array( array( 'name' => 'וריאציה', 'value' => $sku ) );
+			}
+			if ( ! $va ) {
+				continue;
+			}
+			$ok = true;
+			foreach ( $va as $pair ) {
+				$name = self::attr_name( (string) ( $pair['name'] ?? '' ) );
+				if ( ! isset( $by_name[ $name ] ) ) {
+					$ok = false;
+					break;
+				}
+			}
+			if ( ! $ok || count( $va ) !== count( $by_name ) ) {
+				continue;
+			}
+			foreach ( $va as $pair ) {
+				$key     = $by_name[ self::attr_name( (string) $pair['name'] ) ];
+				$attr    = $attrs[ $key ];
+				$options = $attr->get_options();
+				$value   = wc_clean( (string) $pair['value'] );
+				if ( ! in_array( $value, $options, true ) ) {
+					$options[] = $value;
+					$attr->set_options( $options );
+					$attrs[ $key ] = $attr;
+				}
+			}
+			$ready[] = array( 'variant_id' => (string) $v['variant_id'], 'sku' => $sku, 'attributes' => $va );
+		}
+		if ( ! $ready ) {
+			return;
+		}
+		$product->set_attributes( $attrs );
+		$product->save();
+		try {
+			$links = self::ensure_variations( $product->get_id(), $ready );
+		} catch ( Throwable $e ) {
+			return; // e.g. the SKU is taken by another product here; the rest of the update still goes through
+		}
+		$new_links[] = array(
+			'woo_id'      => $product->get_id(),
+			'type'        => 'variable',
+			'name'        => $product->get_name( 'edit' ),
+			'description' => mb_substr( self::plain( (string) $product->get_description( 'edit' ) ), 0, self::DESC_MAX ),
+		);
+		foreach ( $links as $i => $l ) {
+			$new_links[] = array(
+				'woo_id'    => (int) $l['woo_variation_id'],
+				'type'      => 'variation',
+				'parent_id' => $product->get_id(),
+				'sku'       => mb_substr( wc_clean( $ready[ $i ]['sku'] ), 0, 100 ),
+				'name'      => '',
+			);
+		}
 	}
 
 	/**
