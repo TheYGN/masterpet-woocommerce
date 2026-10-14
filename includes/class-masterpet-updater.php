@@ -251,7 +251,7 @@ final class MasterPet_Updater {
 			return;
 		}
 		echo '<h2>' . esc_html( 'עדכונים' ) . '</h2>';
-		echo '<p>' . esc_html( sprintf( 'גרסה מותקנת: %s. גרסאות חדשות מגיעות מ-GitHub ומתעדכנות לבד.', MASTERPET_WC_VERSION ) ) . '</p>';
+		echo '<p>' . esc_html( sprintf( 'התוסף מתעדכן לבד לגרסאות חדשות. הגרסה המותקנת: %s', MASTERPET_WC_VERSION ) ) . '</p>';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		wp_nonce_field( 'masterpet_updates' );
 		echo '<input type="hidden" name="action" value="masterpet_updates">';
