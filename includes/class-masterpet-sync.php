@@ -271,20 +271,22 @@ final class MasterPet_Sync {
 				}
 				self::apply( $item, $ack, $new_links );
 			}
-			if ( $items ) {
-				$a = MasterPet_Client::call( '/v1/ack', $ack );
-				if ( is_string( $a ) || 200 !== $a['status'] ) {
-					$code = is_string( $a ) ? $a : (string) ( $a['data']['error'] ?? 'http_' . $a['status'] );
+			// T-305: variations created here for variants new in MasterPet are linked
+			// by SKU BEFORE the ack: if this fails, the batch is not acked and comes
+			// back (the variations are reused by SKU, never twinned). MasterPet then
+			// sends them through the regular path (price, stock).
+			foreach ( array_chunk( $new_links, 400 ) as $chunk ) {
+				$l = MasterPet_Client::call( '/v1/link-report', array( 'items' => $chunk, 'done' => false ) );
+				if ( is_string( $l ) || 200 !== $l['status'] ) {
+					$code = is_string( $l ) ? $l : (string) ( $l['data']['error'] ?? 'http_' . $l['status'] );
 					self::note_error( $code );
 					return $code;
 				}
 			}
-			// T-305: variations created here for variants new in MasterPet are linked
-			// by SKU; MasterPet then sends them through the regular path (price, stock).
-			if ( $new_links ) {
-				$l = MasterPet_Client::call( '/v1/link-report', array( 'items' => $new_links, 'done' => false ) );
-				if ( is_string( $l ) || 200 !== $l['status'] ) {
-					$code = is_string( $l ) ? $l : (string) ( $l['data']['error'] ?? 'http_' . $l['status'] );
+			if ( $items ) {
+				$a = MasterPet_Client::call( '/v1/ack', $ack );
+				if ( is_string( $a ) || 200 !== $a['status'] ) {
+					$code = is_string( $a ) ? $a : (string) ( $a['data']['error'] ?? 'http_' . $a['status'] );
 					self::note_error( $code );
 					return $code;
 				}
@@ -698,7 +700,9 @@ final class MasterPet_Sync {
 	 * /v1/link-report, which links it and makes MasterPet send its price and
 	 * stock. A variant still without attribute values waits (MasterPet sends the
 	 * product again once they are linked); a variant of an attribute the
-	 * product does not have here (a new dimension) is skipped.
+	 * product does not have here (a new dimension), or of the site's global
+	 * attributes (pa_*), is skipped. At most 10 per product per pull, and none
+	 * once the time budget is spent: the rest come on the next pull.
 	 */
 	private static function add_variations( WC_Product $product, array $new, array &$new_links ): void {
 		$attrs   = $product->get_attributes();
@@ -711,6 +715,9 @@ final class MasterPet_Sync {
 		$made_up = isset( $by_name['וריאציה'] ); // created with the SKU as the value (no attributes in MasterPet)
 		$ready   = array();
 		foreach ( $new as $v ) {
+			if ( count( $ready ) >= 10 || self::over_budget() ) {
+				break;
+			}
 			$sku = (string) ( $v['sku'] ?? '' );
 			if ( '' === $sku || empty( $v['variant_id'] ) ) {
 				continue;
