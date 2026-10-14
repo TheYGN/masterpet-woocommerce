@@ -85,6 +85,12 @@ button, and automatic updates (on by default; the owner can turn them off).
    (`.github/workflows/promote.yml`). The release becomes a regular one and
    every site gets it.
 
+Besides WordPress's own automatic updates, the plugin installs a newer
+release by itself twice a day (0.8.1), the same way WordPress does in the
+background. Some hosts (Hostinger, for one) hide WordPress's switch and run
+updates their own way; this does not depend on them. Where the switch is shown
+and the owner turned it off for this plugin, the plugin leaves it.
+
 A site asks GitHub at most every 6 hours, without a token. Packages are taken
 only from this repository's release downloads.
 
