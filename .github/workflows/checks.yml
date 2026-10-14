@@ -19,3 +19,11 @@ jobs:
           find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l
       - name: Signature matches MasterPet
         run: php tests/signature-vector.php
+      - name: Updater picks the right release
+        run: php tests/updater-pick.php
+      - name: Version header matches MASTERPET_WC_VERSION
+        run: |
+          header=$(sed -n 's/^ \* Version: *\([0-9][0-9.]*\) *$/\1/p' masterpet-woocommerce.php)
+          const=$(sed -n "s/^define( 'MASTERPET_WC_VERSION', '\([^']*\)' );$/\1/p" masterpet-woocommerce.php)
+          echo "header=$header const=$const"
+          [ -n "$header" ] && [ "$header" = "$const" ]

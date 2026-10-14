@@ -143,7 +143,9 @@ final class MasterPet_Admin {
 			echo '<input type="hidden" name="action" value="masterpet_connect">';
 			echo '<input type="text" name="masterpet_code" class="regular-text code" dir="ltr" placeholder="T-XXXX-XXXX-XXXX" autocomplete="off" required> ';
 			echo '<button type="submit" class="button button-primary">' . esc_html( 'חבר' ) . '</button>';
-			echo '</form></div>';
+			echo '</form>';
+			MasterPet_Updater::render_box();
+			echo '</div>';
 			return;
 		}
 
@@ -178,6 +180,7 @@ final class MasterPet_Admin {
 		self::button( 'masterpet_relink', 'קשר שוב לפי מק"ט' );
 		self::button( 'masterpet_check', 'בדיקת קשר' );
 		self::button( 'masterpet_disconnect', 'נתק', 'button button-link-delete' );
+		MasterPet_Updater::render_box();
 		echo '</div>';
 	}
 }

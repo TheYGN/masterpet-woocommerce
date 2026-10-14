@@ -1,0 +1,53 @@
+name: release
+
+# Every merge to main whose version has no release yet publishes one, as a
+# pre-release: only sites marked "test site" get it (PRD #13.1 D-35).
+# After a few days, run "promote" to give it to every site.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Version
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          header=$(sed -n 's/^ \* Version: *\([0-9][0-9.]*\) *$/\1/p' masterpet-woocommerce.php)
+          const=$(sed -n "s/^define( 'MASTERPET_WC_VERSION', '\([^']*\)' );$/\1/p" masterpet-woocommerce.php)
+          if [ -z "$header" ] || [ "$header" != "$const" ]; then
+            echo "::error::Version header ($header) and MASTERPET_WC_VERSION ($const) differ"
+            exit 1
+          fi
+          echo "version=$header" >> "$GITHUB_OUTPUT"
+          if gh release view "v$header" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$header is already released; nothing to do."
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build the zip
+        if: steps.v.outputs.exists != '1'
+        run: |
+          # .gitattributes export-ignore leaves .github and tests out.
+          git archive --format=zip --prefix=masterpet-woocommerce/ -o masterpet-woocommerce.zip HEAD
+          unzip -l masterpet-woocommerce.zip
+          unzip -p masterpet-woocommerce.zip masterpet-woocommerce/masterpet-woocommerce.php | grep -q "Version: *${{ steps.v.outputs.version }}"
+      - name: Publish the pre-release
+        if: steps.v.outputs.exists != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "v$VERSION" masterpet-woocommerce.zip \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$VERSION" --prerelease --generate-notes
