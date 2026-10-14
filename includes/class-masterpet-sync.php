@@ -618,8 +618,9 @@ final class MasterPet_Sync {
 		// product now has more than one active variant, becomes variable here.
 		if ( 'simple' === $type && is_array( $item['upgrade'] ?? null ) && self::created_here( $product, $pid ) ) {
 			$items = self::upgrade_to_variable( $product, $item['upgrade'] );
-			if ( null === $items ) {
-				$ack['failed'][] = array( 'product_id' => $pid, 'version' => $version, 'error' => 'upgrade_failed' );
+			if ( null === $items || 'retry' === $items ) {
+				// Failed, or out of time: MasterPet sends it again in a few minutes.
+				$ack['failed'][] = array( 'product_id' => $pid, 'version' => $version, 'error' => null === $items ? 'upgrade_failed' : 'time_budget' );
 				return;
 			}
 			if ( $items ) {
@@ -745,10 +746,14 @@ final class MasterPet_Sync {
 	 * variation, the attributes come from MasterPet (or, with none, one made-up
 	 * attribute whose values are the SKUs, like create()), and one variation per
 	 * active variant is created by SKU. Returns the /v1/link-report items, [] when
-	 * a variant still lacks its attribute values (try on a later change), or
-	 * null on failure (the product is then left as a draft, never half-sold).
+	 * it cannot be done yet (a variant without its attribute values, or a SKU
+	 * another product here already has: nothing is touched), 'retry' when out of
+	 * time, or null on failure (the product is then left as a draft, never
+	 * half-sold).
+	 *
+	 * @return array|string|null
 	 */
-	private static function upgrade_to_variable( WC_Product $product, array $up ): ?array {
+	private static function upgrade_to_variable( WC_Product $product, array $up ) {
 		$variants = is_array( $up['variants'] ?? null ) ? $up['variants'] : array();
 		$attrs    = is_array( $up['attributes'] ?? null ) ? $up['attributes'] : array();
 		if ( count( $variants ) < 2 ) {
@@ -768,14 +773,32 @@ final class MasterPet_Sync {
 			}
 		}
 		if ( self::over_budget() ) {
-			return array();
+			return 'retry';
+		}
+		$id = $product->get_id();
+		// Every SKU must be free here, or already this product's (review 14.10):
+		// otherwise nothing changes and the product stays simple and on sale.
+		foreach ( $variants as $v ) {
+			$owner = wc_get_product_id_by_sku( mb_substr( wc_clean( (string) $v['sku'] ), 0, 100 ) );
+			if ( $owner && $owner !== $id ) {
+				$o = wc_get_product( $owner );
+				if ( ! $o || ! $o->is_type( 'variation' ) || $o->get_parent_id() !== $id ) {
+					return array();
+				}
+			}
 		}
 
-		$id = $product->get_id();
 		MasterPet_Lock::$writing = true;
 		try {
-			// The SKU must be free before a variation can take it.
+			// The SKU must be free before a variation can take it. A variable
+			// parent holds no stock or price of its own (the variations do).
 			$product->set_sku( '' );
+			$product->set_manage_stock( false );
+			$product->set_stock_quantity( null );
+			$product->set_regular_price( '' );
+			$product->set_sale_price( '' );
+			$product->set_date_on_sale_from( '' );
+			$product->set_date_on_sale_to( '' );
 			$product->save();
 
 			$p        = new WC_Product_Variable( $id );
@@ -796,12 +819,15 @@ final class MasterPet_Sync {
 			$links = self::ensure_variations( $id, $variants );
 		} catch ( Throwable $e ) {
 			wp_update_post( array( 'ID' => $id, 'post_status' => 'draft' ) );
+			// The lock must not put the old SKU and status back on a later save.
+			MasterPet_Lock::remember( wc_get_product( $id ) );
 			return null;
 		} finally {
 			MasterPet_Lock::$writing = false;
 		}
 
 		$fresh = wc_get_product( $id );
+		MasterPet_Lock::remember( $fresh );
 		$items = array(
 			array(
 				'woo_id'      => $id,
