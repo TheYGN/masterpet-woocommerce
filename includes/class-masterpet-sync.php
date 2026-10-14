@@ -643,6 +643,9 @@ final class MasterPet_Sync {
 			if ( 'variable' === $type && ! empty( $item['new_variants'] ) && is_array( $item['new_variants'] ) ) {
 				self::add_variations( $product, $item['new_variants'], $new_links );
 			}
+			if ( 'variable' === $type ) {
+				self::options_for_variations( $product );
+			}
 
 			// Last, so a product that fails above never downloads the image again on every retry.
 			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
@@ -742,7 +745,10 @@ final class MasterPet_Sync {
 			}
 			foreach ( $va as $pair ) {
 				$key     = $by_name[ self::attr_name( (string) $pair['name'] ) ];
-				$attr    = $attrs[ $key ];
+				// A copy: changing the product's own attribute object in place leaves
+				// set_attributes() seeing no change, and the new option was never
+				// saved (ERA גור, 14.10: "4" missing from the storefront's choices).
+				$attr    = clone $attrs[ $key ];
 				$options = $attr->get_options();
 				$value   = wc_clean( (string) $pair['value'] );
 				if ( ! in_array( $value, $options, true ) ) {
@@ -777,6 +783,41 @@ final class MasterPet_Sync {
 				'sku'       => mb_substr( wc_clean( $ready[ $i ]['sku'] ), 0, 100 ),
 				'name'      => '',
 			);
+		}
+	}
+
+	/**
+	 * Every value a variation of this product uses is one of the product's
+	 * options, or the storefront cannot offer it. Repairs products where 0.8.0
+	 * added a variation but not its option. Only the product's own (non-global)
+	 * attributes; nothing is removed.
+	 */
+	private static function options_for_variations( WC_Product $product ): void {
+		$attrs   = $product->get_attributes();
+		$changed = false;
+		foreach ( $product->get_children() as $child_id ) {
+			$var = wc_get_product( $child_id );
+			if ( ! $var ) {
+				continue;
+			}
+			foreach ( $var->get_attributes() as $key => $value ) {
+				$value = (string) $value;
+				if ( '' === $value || ! isset( $attrs[ $key ] ) || ! $attrs[ $key ] instanceof WC_Product_Attribute || $attrs[ $key ]->is_taxonomy() ) {
+					continue;
+				}
+				$options = $attrs[ $key ]->get_options();
+				if ( in_array( $value, $options, true ) ) {
+					continue;
+				}
+				$attr = clone $attrs[ $key ];
+				$options[] = $value;
+				$attr->set_options( $options );
+				$attrs[ $key ] = $attr;
+				$changed       = true;
+			}
+		}
+		if ( $changed ) {
+			$product->set_attributes( $attrs );
 		}
 	}
 
