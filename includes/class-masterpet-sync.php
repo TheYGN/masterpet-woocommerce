@@ -30,6 +30,12 @@ final class MasterPet_Sync {
 	const LINK_BYTES    = 600000; // a link-report request stays well under MasterPet's 1 MB
 	const BUDGET        = 20;     // seconds of work per job, then it reschedules itself
 
+	/**
+	 * T-305 part 2: link-report items of products turned from simple into
+	 * variable in this batch. Sent AFTER the ack, which drops their old link.
+	 */
+	private static $relinks = array();
+
 	/** When this job started (microtime). */
 	private static $started = 0.0;
 
@@ -262,7 +268,8 @@ final class MasterPet_Sync {
 			}
 			$items = is_array( $r['data']['items'] ?? null ) ? $r['data']['items'] : array();
 			$ack   = array( 'done' => array(), 'failed' => array(), 'missing' => array(), 'missing_variations' => array() );
-			$new_links = array();
+			$new_links     = array();
+			self::$relinks = array();
 			foreach ( $items as $item ) {
 				// Out of time: what is not written stays leased in MasterPet and
 				// comes back on a later pull.
@@ -287,6 +294,17 @@ final class MasterPet_Sync {
 				$a = MasterPet_Client::call( '/v1/ack', $ack );
 				if ( is_string( $a ) || 200 !== $a['status'] ) {
 					$code = is_string( $a ) ? $a : (string) ( $a['data']['error'] ?? 'http_' . $a['status'] );
+					self::note_error( $code );
+					return $code;
+				}
+			}
+			// T-305 part 2: the ack dropped the old (simple) links; link the variable
+			// product and its variations by SKU. If this fails, MasterPet's creation
+			// path finds the variations by SKU and links them later.
+			foreach ( array_chunk( self::$relinks, 400 ) as $chunk ) {
+				$l = MasterPet_Client::call( '/v1/link-report', array( 'items' => $chunk, 'done' => false ) );
+				if ( is_string( $l ) || 200 !== $l['status'] ) {
+					$code = is_string( $l ) ? $l : (string) ( $l['data']['error'] ?? 'http_' . $l['status'] );
 					self::note_error( $code );
 					return $code;
 				}
@@ -596,6 +614,24 @@ final class MasterPet_Sync {
 			return;
 		}
 
+		// T-305 part 2: a simple product this plugin created, whose MasterPet
+		// product now has more than one active variant, becomes variable here.
+		if ( 'simple' === $type && is_array( $item['upgrade'] ?? null ) && self::created_here( $product, $pid ) ) {
+			$items = self::upgrade_to_variable( $product, $item['upgrade'] );
+			if ( null === $items ) {
+				$ack['failed'][] = array( 'product_id' => $pid, 'version' => $version, 'error' => 'upgrade_failed' );
+				return;
+			}
+			if ( $items ) {
+				// Written: its events go, its old links go, and it is linked again by SKU.
+				$ack['done'][]    = array( 'product_id' => $pid, 'version' => $version );
+				$ack['missing'][] = array( 'product_id' => $pid );
+				self::$relinks    = array_merge( self::$relinks, $items );
+				return;
+			}
+			// Not ready yet (a variant without its attribute values): a plain update.
+		}
+
 		MasterPet_Lock::$writing = true;
 		try {
 			$site_id   = (string) MasterPet_Settings::get()['site_id'];
@@ -693,6 +729,97 @@ final class MasterPet_Sync {
 		// D-8: the connected branch's stock. manage_stock lets the site lower it between updates.
 		$p->set_manage_stock( true );
 		$p->set_stock_quantity( max( 0, (int) $v['qty'] ) );
+	}
+
+	/** Created here by this plugin for MasterPet product $pid, for this connection. */
+	private static function created_here( WC_Product $p, string $pid ): bool {
+		$site = (string) ( MasterPet_Settings::get()['site_id'] ?? '' );
+		return '' !== $pid && '' !== $site
+			&& $pid === (string) $p->get_meta( '_masterpet_pending' )
+			&& $site === (string) $p->get_meta( '_masterpet_site' );
+	}
+
+	/**
+	 * T-305 part 2: turns a simple product into a variable one in place (the
+	 * same id, URL, images and categories): the SKU moves from the product to a
+	 * variation, the attributes come from MasterPet (or, with none, one made-up
+	 * attribute whose values are the SKUs, like create()), and one variation per
+	 * active variant is created by SKU. Returns the /v1/link-report items, [] when
+	 * a variant still lacks its attribute values (try on a later change), or
+	 * null on failure (the product is then left as a draft, never half-sold).
+	 */
+	private static function upgrade_to_variable( WC_Product $product, array $up ): ?array {
+		$variants = is_array( $up['variants'] ?? null ) ? $up['variants'] : array();
+		$attrs    = is_array( $up['attributes'] ?? null ) ? $up['attributes'] : array();
+		if ( count( $variants ) < 2 ) {
+			return array();
+		}
+		if ( ! $attrs ) {
+			$values = array();
+			foreach ( $variants as $i => $v ) {
+				$values[]                     = (string) $v['sku'];
+				$variants[ $i ]['attributes'] = array( array( 'name' => 'וריאציה', 'value' => (string) $v['sku'] ) );
+			}
+			$attrs = array( array( 'name' => 'וריאציה', 'values' => $values ) );
+		}
+		foreach ( $variants as $v ) {
+			if ( count( (array) ( $v['attributes'] ?? array() ) ) !== count( $attrs ) ) {
+				return array();
+			}
+		}
+		if ( self::over_budget() ) {
+			return array();
+		}
+
+		$id = $product->get_id();
+		MasterPet_Lock::$writing = true;
+		try {
+			// The SKU must be free before a variation can take it.
+			$product->set_sku( '' );
+			$product->save();
+
+			$p        = new WC_Product_Variable( $id );
+			$wc_attrs = array();
+			$position = 0;
+			foreach ( $attrs as $a ) {
+				$attr = new WC_Product_Attribute();
+				$attr->set_name( self::attr_name( (string) $a['name'] ) );
+				$attr->set_options( array_values( array_map( 'wc_clean', array_map( 'strval', (array) ( $a['values'] ?? array() ) ) ) ) );
+				$attr->set_position( $position++ );
+				$attr->set_visible( true );
+				$attr->set_variation( true );
+				$wc_attrs[] = $attr;
+			}
+			$p->set_attributes( $wc_attrs );
+			$p->save();
+			wc_delete_product_transients( $id );
+			$links = self::ensure_variations( $id, $variants );
+		} catch ( Throwable $e ) {
+			wp_update_post( array( 'ID' => $id, 'post_status' => 'draft' ) );
+			return null;
+		} finally {
+			MasterPet_Lock::$writing = false;
+		}
+
+		$fresh = wc_get_product( $id );
+		$items = array(
+			array(
+				'woo_id'      => $id,
+				'type'        => 'variable',
+				'name'        => $fresh ? $fresh->get_name( 'edit' ) : '',
+				'description' => $fresh ? mb_substr( self::plain( (string) $fresh->get_description( 'edit' ) ), 0, self::DESC_MAX ) : '',
+			),
+		);
+		foreach ( $links as $i => $l ) {
+			$items[] = array(
+				'woo_id'    => (int) $l['woo_variation_id'],
+				'type'      => 'variation',
+				'parent_id' => $id,
+				'sku'       => mb_substr( wc_clean( (string) $variants[ $i ]['sku'] ), 0, 100 ),
+				'name'      => '',
+			);
+		}
+		return $items;
 	}
 
 	/**
