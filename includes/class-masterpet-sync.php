@@ -606,12 +606,18 @@ final class MasterPet_Sync {
 				$product->update_meta_data( '_masterpet_variant_id', (string) $v['variant_id'] );
 			} else {
 				foreach ( $variants as $v ) {
+					// Each variation may download an image: out of time, this product is
+					// retried later (written variations and downloaded images are kept).
+					if ( self::over_budget() ) {
+						throw new RuntimeException( 'time_budget' );
+					}
 					$var = wc_get_product( (int) $v['woo_variation_id'] );
 					if ( ! $var || $var->get_parent_id() !== $product->get_id() ) {
 						$ack['missing_variations'][] = array( 'variant_id' => (string) $v['variant_id'] );
 						continue;
 					}
 					self::stock_and_price( $var, $v );
+					self::variation_image( $var, $v );
 					$var->set_status( ! empty( $v['enabled'] ) ? 'publish' : 'private' );
 					$var->update_meta_data( '_masterpet_site', $site_id );
 					$var->update_meta_data( '_masterpet_variant_id', (string) $v['variant_id'] );
@@ -666,6 +672,27 @@ final class MasterPet_Sync {
 		// D-8: the connected branch's stock. manage_stock lets the site lower it between updates.
 		$p->set_manage_stock( true );
 		$p->set_stock_quantity( max( 0, (int) $v['qty'] ) );
+	}
+
+	/**
+	 * T-301: a variation's own image from MasterPet. None in MasterPet: an image
+	 * MasterPet set before is taken off, so the variation shows the product's
+	 * image again; an image the site set itself stays. An older MasterPet that
+	 * does not send the field changes nothing.
+	 */
+	private static function variation_image( WC_Product $var, array $v ): void {
+		if ( ! array_key_exists( 'image_url', $v ) ) {
+			return;
+		}
+		$url = (string) ( $v['image_url'] ?? '' );
+		if ( '' !== $url ) {
+			self::image( $var, $url );
+			return;
+		}
+		if ( '' !== (string) $var->get_meta( '_masterpet_image_url' ) ) {
+			$var->set_image_id( 0 );
+			$var->delete_meta_data( '_masterpet_image_url' );
+		}
 	}
 
 	/**
