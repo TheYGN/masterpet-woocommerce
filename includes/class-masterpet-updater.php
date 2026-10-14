@@ -250,13 +250,14 @@ final class MasterPet_Updater {
 		if ( ! current_user_can( 'update_plugins' ) ) {
 			return;
 		}
-		echo '<h2>' . esc_html( 'עדכונים' ) . '</h2>';
-		echo '<p>' . esc_html( sprintf( 'התוסף מתעדכן לבד לגרסאות חדשות. הגרסה המותקנת: %s', MASTERPET_WC_VERSION ) ) . '</p>';
+		echo '<div class="mp-card"><div class="mp-card-head">' . MasterPet_Admin::icon( 'update' ) . '<h2 class="mp-card-title">' . esc_html( 'עדכונים' ) . '</h2>'; // phpcs:ignore WordPress.Security.EscapeOutput -- icon() is escaped.
+		echo '<span class="mp-chip mp-chip--off mp-chip--plain">' . esc_html( 'גרסה' ) . ' <span class="mp-num">' . esc_html( MASTERPET_WC_VERSION ) . '</span></span></div>';
+		echo '<p>' . esc_html( 'התוסף מתעדכן לבד לגרסאות חדשות.' ) . '</p>';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		wp_nonce_field( 'masterpet_updates' );
 		echo '<input type="hidden" name="action" value="masterpet_updates">';
-		echo '<label><input type="checkbox" name="masterpet_test_site" value="1"' . checked( self::is_test_site(), true, false ) . '> ';
-		echo esc_html( 'אתר בדיקה: מקבל גרסאות חדשות כמה ימים לפני כל האתרים' ) . '</label><p>';
-		echo '<button type="submit" class="button">' . esc_html( 'שמור ובדוק עדכונים' ) . '</button></p></form>';
+		echo '<div class="mp-actions mp-update-row"><label class="mp-switch-label"><input type="checkbox" class="mp-switch" role="switch" name="masterpet_test_site" value="1"' . checked( self::is_test_site(), true, false ) . '>';
+		echo '<span class="mp-switch-text"><span>' . esc_html( 'אתר בדיקה' ) . '</span><small>' . esc_html( 'מקבל גרסאות חדשות כמה ימים לפני כל האתרים' ) . '</small></span></label>';
+		echo '<button type="submit" class="mp-btn mp-btn--outlined">' . MasterPet_Admin::icon( 'update' ) . esc_html( 'שמור ובדוק עדכונים' ) . '</button></div></form></div>'; // phpcs:ignore WordPress.Security.EscapeOutput -- icon() is escaped.
 	}
 }
