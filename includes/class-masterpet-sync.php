@@ -197,6 +197,10 @@ final class MasterPet_Sync {
 						$one['price']       = wc_format_decimal( $regular, 2 );
 						$one['price_gross'] = ! wc_tax_enabled() || wc_prices_include_tax();
 					}
+					// And the stock count, when this product manages stock (it enters MasterPet once).
+					if ( $product->managing_stock() ) {
+						$one['stock'] = max( 0, (int) $product->get_stock_quantity( 'edit' ) );
+					}
 					$size  = strlen( (string) wp_json_encode( $one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
 					if ( $items && $bytes + $size > self::LINK_BYTES ) {
 						$r = self::send_link_page( $items, false, $totals );
@@ -1014,8 +1018,9 @@ final class MasterPet_Sync {
 	 * as the file itself (MasterPet never fetches a URL from the site). MasterPet
 	 * turns it into WebP and uses it only while the product has no image there.
 	 * Sent at most once per image: '_masterpet_image_sent' keeps the attachment id
-	 * once MasterPet answered (queued, or why not). A network error or a 5xx is
-	 * tried again on the product's next change.
+	 * once MasterPet answered (queued, or why not). A network error, a 5xx or a
+	 * proxy's refusal is tried again on the product's next change. MasterPet also
+	 * refuses a second image for a product once one came in (server side).
 	 */
 	private static function send_site_image( WC_Product $product ): void {
 		$att = (int) $product->get_image_id( 'edit' );
@@ -1045,36 +1050,46 @@ final class MasterPet_Sync {
 		if ( ! is_array( $r ) ) {
 			return;
 		}
-		// 200: queued, has_image or not_linked; 413/422: MasterPet will not take this file.
-		if ( 200 === $r['status'] || 413 === $r['status'] || 422 === $r['status'] ) {
+		// 200: queued, or why not (has_image, not_linked, skipped). 413/422 only when
+		// MasterPet itself said so: a proxy's 413 in front of it is tried again later.
+		$error = is_array( $r['data'] ?? null ) ? (string) ( $r['data']['error'] ?? '' ) : '';
+		if ( 200 === $r['status']
+			|| ( 413 === $r['status'] && 'too_large' === $error )
+			|| ( 422 === $r['status'] && 'bad_image' === $error ) ) {
 			$product->update_meta_data( '_masterpet_image_sent', $att );
 		}
 	}
 
 	/**
 	 * The attachment's file to send: the uploaded one, or WordPress's "large" size
-	 * when that is over 3 MB. Only JPEG, PNG or WebP; null otherwise.
+	 * when that is over 3 MB. Only a real JPEG, PNG or WebP (by its content, not
+	 * its name) inside the uploads folder; null otherwise.
 	 */
 	private static function image_file( int $att ): ?string {
 		$allowed = array( 'image/jpeg', 'image/png', 'image/webp' );
+		$uploads = wp_get_upload_dir();
+		$base    = realpath( (string) $uploads['basedir'] );
 		$main    = get_attached_file( $att );
-		$files   = array();
-		if ( $main ) {
-			$files[] = $main;
-			$large   = image_get_intermediate_size( $att, 'large' );
-			if ( is_array( $large ) && ! empty( $large['path'] ) ) {
-				$uploads = wp_get_upload_dir();
-				$files[] = trailingslashit( $uploads['basedir'] ) . $large['path'];
-			}
+		if ( ! $base || ! $main ) {
+			return null;
+		}
+		$files = array( $main );
+		$large = image_get_intermediate_size( $att, 'large' );
+		if ( is_array( $large ) && ! empty( $large['path'] ) ) {
+			$files[] = trailingslashit( (string) $uploads['basedir'] ) . $large['path'];
 		}
 		foreach ( $files as $f ) {
-			if ( ! is_readable( $f ) ) {
+			$real = realpath( $f );
+			// Only a file under uploads: _wp_attached_file can hold any path.
+			if ( ! $real || 0 !== strpos( $real, trailingslashit( $base ) ) || ! is_readable( $real ) ) {
 				continue;
 			}
-			$size = filesize( $f );
-			$type = wp_check_filetype( $f );
-			if ( $size && $size <= self::IMAGE_MAX_BYTES && in_array( (string) $type['type'], $allowed, true ) ) {
-				return $f;
+			$size = filesize( $real );
+			if ( ! $size || $size > self::IMAGE_MAX_BYTES ) {
+				continue;
+			}
+			if ( in_array( (string) wp_get_image_mime( $real ), $allowed, true ) ) {
+				return $real;
 			}
 		}
 		return null;

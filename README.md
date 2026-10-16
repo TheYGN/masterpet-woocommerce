@@ -60,7 +60,7 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    the site has its own, the plugin sends the image file to MasterPet once.
    MasterPet turns it into WebP and from then on its copy is the one shown here.
    MasterPet never fetches a URL from the site. The link report also carries a
-   simple product's regular price, so MasterPet can add a product that exists
+   simple product's regular price and stock, so MasterPet can add a product that exists
    only here ("הוסף למערכת").
 4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
