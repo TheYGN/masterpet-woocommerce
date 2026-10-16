@@ -56,6 +56,12 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    new variation here, linked by SKU (0.8.0).
    A simple product created here whose MasterPet product gets a second
    variant becomes a variable product in place (0.9.0).
+   Site images (0.10.0): when MasterPet has no image for a linked product and
+   the site has its own, the plugin sends the image file to MasterPet once.
+   MasterPet turns it into WebP and from then on its copy is the one shown here.
+   MasterPet never fetches a URL from the site. The link report also carries a
+   simple product's regular price, so MasterPet can add a product that exists
+   only here ("הוסף למערכת").
 4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
    short description and SEO stay open. Disconnecting releases the lock.
