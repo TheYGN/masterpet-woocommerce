@@ -8,6 +8,8 @@
  * and the REST API, "Duplicate" and the CSV importer refuse to create one.
  * Products MasterPet sends are created by the sync through the WooCommerce CRUD
  * classes, which none of these paths touch. Disconnecting releases everything.
+ * The importer also refuses new variations of existing products; updating
+ * existing products and adding variations in the editor stay possible.
  *
  * @package MasterPet
  */
@@ -16,12 +18,21 @@ defined( 'ABSPATH' ) || exit;
 
 final class MasterPet_No_New {
 
-	const MESSAGE = 'מוסיפים מוצרים ב-MasterPet. המוצר עולה לאתר לבד.';
+	private static function message(): string {
+		return __( 'מוסיפים מוצרים ב-MasterPet. המוצר עולה לאתר לבד.', 'masterpet-woocommerce' );
+	}
+
+	private static function title(): string {
+		return __( 'מוסיפים מוצרים ב-MasterPet', 'masterpet-woocommerce' );
+	}
 
 	public static function init(): void {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ), 99 );
 		add_action( 'load-post-new.php', array( __CLASS__, 'add_screen' ) );
 		add_action( 'admin_head-edit.php', array( __CLASS__, 'hide_button' ) );
+		add_action( 'admin_head-post.php', array( __CLASS__, 'hide_button' ) );
+		add_action( 'admin_bar_menu', array( __CLASS__, 'admin_bar' ), 999 );
+		add_filter( 'rest_pre_insert_product', array( __CLASS__, 'refuse_core_rest' ), 5, 2 );
 		add_filter( 'post_row_actions', array( __CLASS__, 'row_actions' ), 99, 2 );
 		add_action( 'admin_action_duplicate_product', array( __CLASS__, 'refuse_duplicate' ), 1 );
 		add_filter( 'woocommerce_rest_pre_insert_product_object', array( __CLASS__, 'refuse_rest' ), 5, 3 );
@@ -40,7 +51,29 @@ final class MasterPet_No_New {
 	public static function menu(): void {
 		if ( self::active() ) {
 			remove_submenu_page( 'edit.php?post_type=product', 'post-new.php?post_type=product' );
+			// WooCommerce's new product editor, when it is on.
+			remove_submenu_page( 'edit.php?post_type=product', 'admin.php?page=wc-admin&path=/add-product' );
 		}
+	}
+
+	/** "+ New > Product" in the admin bar. */
+	public static function admin_bar( $bar ): void {
+		if ( self::active() && $bar instanceof WP_Admin_Bar ) {
+			$bar->remove_node( 'new-product' );
+		}
+	}
+
+	/**
+	 * The core REST route (POST wp/v2/product) skips WooCommerce's own filter.
+	 *
+	 * @param stdClass|WP_Error $prepared
+	 * @return stdClass|WP_Error
+	 */
+	public static function refuse_core_rest( $prepared, $request = null ) {
+		if ( self::active() && is_object( $prepared ) && ! is_wp_error( $prepared ) && empty( $prepared->ID ) ) {
+			return new WP_Error( 'masterpet_no_new_products', self::message(), array( 'status' => 403 ) );
+		}
+		return $prepared;
 	}
 
 	/** The add-new screen for products, reached by a bookmark or a typed URL. */
@@ -50,8 +83,8 @@ final class MasterPet_No_New {
 			return;
 		}
 		wp_die(
-			'<p>' . esc_html( self::MESSAGE ) . '</p><p><a href="' . esc_url( self::where() ) . '">' . esc_html( 'למסך MasterPet' ) . '</a></p>',
-			esc_html( 'מוסיפים מוצרים ב-MasterPet' ),
+			'<p>' . esc_html( self::message() ) . '</p><p><a href="' . esc_url( self::where() ) . '">' . esc_html__( 'למסך MasterPet', 'masterpet-woocommerce' ) . '</a></p>',
+			esc_html( self::title() ),
 			array( 'response' => 403, 'back_link' => true )
 		);
 	}
@@ -77,7 +110,7 @@ final class MasterPet_No_New {
 
 	public static function refuse_duplicate(): void {
 		if ( self::active() ) {
-			wp_die( esc_html( self::MESSAGE ), esc_html( 'מוסיפים מוצרים ב-MasterPet' ), array( 'response' => 403, 'back_link' => true ) );
+			wp_die( esc_html( self::message() ), esc_html( self::title() ), array( 'response' => 403, 'back_link' => true ) );
 		}
 	}
 
@@ -89,7 +122,7 @@ final class MasterPet_No_New {
 	 */
 	public static function refuse_rest( $product, $request = null, $creating = false ) {
 		if ( $creating && self::active() && $product instanceof WC_Product ) {
-			return new WP_Error( 'masterpet_no_new_products', self::MESSAGE, array( 'status' => 403 ) );
+			return new WP_Error( 'masterpet_no_new_products', self::message(), array( 'status' => 403 ) );
 		}
 		return $product;
 	}
@@ -102,8 +135,11 @@ final class MasterPet_No_New {
 	 * @return WC_Product|WP_Error
 	 */
 	public static function refuse_import( $product, $data = array() ) {
-		if ( self::active() && $product instanceof WC_Product && ! $product->get_id() ) {
-			return new WP_Error( 'masterpet_no_new_products', self::MESSAGE );
+		// A CSV row with an ID column first saves a placeholder with status "importing"
+		// (WooCommerce parse_id_field), so a non-zero id can still be a new product.
+		if ( self::active() && $product instanceof WC_Product
+			&& ( ! $product->get_id() || 'importing' === $product->get_status( 'edit' ) ) ) {
+			return new WP_Error( 'masterpet_no_new_products', self::message() );
 		}
 		return $product;
 	}
