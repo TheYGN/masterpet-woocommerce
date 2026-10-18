@@ -190,6 +190,17 @@ final class MasterPet_Sync {
 						'name'        => $product->get_name( 'edit' ),
 						'description' => $desc,
 					);
+					// T-306 (0.10.0): the regular price, so MasterPet can add a product that
+					// exists only here ("הוסף למערכת"). price_gross: the price includes VAT.
+					$regular = (string) $product->get_regular_price( 'edit' );
+					if ( '' !== $regular && is_numeric( $regular ) ) {
+						$one['price']       = wc_format_decimal( $regular, 2 );
+						$one['price_gross'] = ! wc_tax_enabled() || wc_prices_include_tax();
+					}
+					// And the stock count, when this product manages stock (it enters MasterPet once).
+					if ( $product->managing_stock() ) {
+						$one['stock'] = max( 0, (int) $product->get_stock_quantity( 'edit' ) );
+					}
 					$size  = strlen( (string) wp_json_encode( $one, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
 					if ( $items && $bytes + $size > self::LINK_BYTES ) {
 						$r = self::send_link_page( $items, false, $totals );
@@ -686,6 +697,10 @@ final class MasterPet_Sync {
 
 			// Last, so a product that fails above never downloads the image again on every retry.
 			self::image( $product, (string) ( $item['image_url'] ?? '' ) );
+			// T-292 (0.10.0): MasterPet has no image and the site has its own: send it once.
+			if ( array_key_exists( 'image_url', $item ) && '' === (string) ( $item['image_url'] ?? '' ) ) {
+				self::send_site_image( $product );
+			}
 			// D-5a: categories and tags come from MasterPet, created here by name.
 			// An empty list leaves the site's own categories alone (no "Uncategorized").
 			if ( ! empty( $item['categories'] ) && is_array( $item['categories'] ) ) {
@@ -995,6 +1010,91 @@ final class MasterPet_Sync {
 		}
 	}
 
+	/** Largest file sent to MasterPet; the server refuses more (3 MB). */
+	const IMAGE_MAX_BYTES = 3145728;
+
+	/**
+	 * T-292 (0.10.0, PRD FR-8): the site's own product image goes to MasterPet once,
+	 * as the file itself (MasterPet never fetches a URL from the site). MasterPet
+	 * turns it into WebP and uses it only while the product has no image there.
+	 * Sent at most once per image: '_masterpet_image_sent' keeps the attachment id
+	 * once MasterPet answered (queued, or why not). A network error, a 5xx or a
+	 * proxy's refusal is tried again on the product's next change. MasterPet also
+	 * refuses a second image for a product once one came in (server side).
+	 */
+	private static function send_site_image( WC_Product $product ): void {
+		$att = (int) $product->get_image_id( 'edit' );
+		if ( ! $att || '' !== (string) $product->get_meta( '_masterpet_image_url' ) ) {
+			return; // no image here, or the one shown came from MasterPet
+		}
+		if ( (int) $product->get_meta( '_masterpet_image_sent' ) === $att || self::over_budget() ) {
+			return;
+		}
+		$file = self::image_file( $att );
+		if ( null === $file ) {
+			$product->update_meta_data( '_masterpet_image_sent', $att ); // not a JPEG/PNG/WebP up to 3 MB: never sent
+			return;
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local upload
+		$bytes = file_get_contents( $file );
+		if ( false === $bytes || '' === $bytes ) {
+			return;
+		}
+		$r = MasterPet_Client::call(
+			'/v1/images',
+			array(
+				'woo_id' => $product->get_id(),
+				'data'   => base64_encode( $bytes ), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- the file itself, inside the signed body
+			)
+		);
+		if ( ! is_array( $r ) ) {
+			return;
+		}
+		// 200: queued, or why not (has_image, not_linked, skipped). 413/422 only when
+		// MasterPet itself said so: a proxy's 413 in front of it is tried again later.
+		$error = is_array( $r['data'] ?? null ) ? (string) ( $r['data']['error'] ?? '' ) : '';
+		if ( 200 === $r['status']
+			|| ( 413 === $r['status'] && 'too_large' === $error )
+			|| ( 422 === $r['status'] && 'bad_image' === $error ) ) {
+			$product->update_meta_data( '_masterpet_image_sent', $att );
+		}
+	}
+
+	/**
+	 * The attachment's file to send: the uploaded one, or WordPress's "large" size
+	 * when that is over 3 MB. Only a real JPEG, PNG or WebP (by its content, not
+	 * its name) inside the uploads folder; null otherwise.
+	 */
+	private static function image_file( int $att ): ?string {
+		$allowed = array( 'image/jpeg', 'image/png', 'image/webp' );
+		$uploads = wp_get_upload_dir();
+		$base    = realpath( (string) $uploads['basedir'] );
+		$main    = get_attached_file( $att );
+		if ( ! $base || ! $main ) {
+			return null;
+		}
+		$files = array( $main );
+		$large = image_get_intermediate_size( $att, 'large' );
+		if ( is_array( $large ) && ! empty( $large['path'] ) ) {
+			$files[] = trailingslashit( (string) $uploads['basedir'] ) . $large['path'];
+		}
+		foreach ( $files as $f ) {
+			$real = realpath( $f );
+			// Only a file under uploads: _wp_attached_file can hold any path.
+			if ( ! $real || 0 !== strpos( $real, trailingslashit( $base ) ) || ! is_readable( $real ) ) {
+				continue;
+			}
+			$size = filesize( $real );
+			if ( ! $size || $size > self::IMAGE_MAX_BYTES ) {
+				continue;
+			}
+			if ( in_array( (string) wp_get_image_mime( $real ), $allowed, true ) ) {
+				return $real;
+			}
+		}
+		return null;
+	}
+
 	/**
 	 * D-6: an image that came from MasterPet is kept in step; an image the site
 	 * already had stays until MasterPet takes the site's images in (later phase).
@@ -1006,7 +1106,10 @@ final class MasterPet_Sync {
 		}
 		$ours    = (string) $product->get_meta( '_masterpet_image_url' );
 		$current = (int) $product->get_image_id( 'edit' );
-		if ( $current && '' === $ours ) {
+		// T-292: an image this site sent to MasterPet came back as MasterPet's WebP
+		// copy; from now on MasterPet's is the one shown here.
+		$sent = (int) $product->get_meta( '_masterpet_image_sent' );
+		if ( $current && '' === $ours && $sent !== $current ) {
 			return; // the site's own image
 		}
 		if ( $current && $ours === $url ) {
