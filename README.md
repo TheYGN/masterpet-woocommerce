@@ -69,6 +69,9 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    and button are gone, the add-new screen points to MasterPet, and the REST
    API, "Duplicate" and the CSV importer refuse to create a product. Products
    are added in MasterPet and come here by themselves. Disconnecting releases it.
+6. Nightly check (0.12.0): once a day (03:00 site time) the plugin sends
+   MasterPet the SKU, regular price and stock of every linked item; MasterPet
+   sends again every product that differs. Nothing is written here by the check.
 
 Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real

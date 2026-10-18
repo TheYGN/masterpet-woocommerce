@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/TheYGN/masterpet-woocommerce
  * Update URI:        https://github.com/TheYGN/masterpet-woocommerce
  * Description:       מחבר את חנות WooCommerce ל-MasterPet: המוצרים מגיעים מ-MasterPet וההזמנות מנוהלות שם.
- * Version:           0.11.0
+ * Version:           0.12.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Requires Plugins:  woocommerce
@@ -20,7 +20,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MASTERPET_WC_VERSION', '0.11.0' );
+define( 'MASTERPET_WC_VERSION', '0.12.0' );
 define( 'MASTERPET_WC_FILE', __FILE__ );
 define( 'MASTERPET_WC_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -32,6 +32,7 @@ require_once MASTERPET_WC_DIR . 'includes/class-masterpet-rest.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-sync.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-lock.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-no-new.php';
+require_once MASTERPET_WC_DIR . 'includes/class-masterpet-fingerprint.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-convert.php';
 require_once MASTERPET_WC_DIR . 'includes/class-masterpet-updater.php';
 
@@ -52,6 +53,7 @@ add_action( 'plugins_loaded', array( 'MasterPet_Rest', 'init' ) );
 add_action( 'plugins_loaded', array( 'MasterPet_Sync', 'init' ) );
 add_action( 'plugins_loaded', array( 'MasterPet_Lock', 'init' ) );
 add_action( 'plugins_loaded', array( 'MasterPet_No_New', 'init' ) );
+add_action( 'plugins_loaded', array( 'MasterPet_Fingerprint', 'init' ) );
 // Updates from GitHub releases; test sites first (D-34, D-35).
 add_action( 'plugins_loaded', array( 'MasterPet_Updater', 'init' ) );
 
