@@ -65,6 +65,10 @@ The first letter of the code picks the server: `T` = test, `P` = production.
 4. On linked products those fields are locked: greyed in the editor and put
    back on save (admin form, REST API, any other save). Sale price, gallery,
    short description and SEO stay open. Disconnecting releases the lock.
+5. No new products here (0.11.0): while connected, the "Add new" menu item
+   and button are gone, the add-new screen points to MasterPet, and the REST
+   API, "Duplicate" and the CSV importer refuse to create a product. Products
+   are added in MasterPet and come here by themselves. Disconnecting releases it.
 
 Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real
