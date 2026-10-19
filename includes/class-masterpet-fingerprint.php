@@ -26,6 +26,13 @@ final class MasterPet_Fingerprint {
 	const BUDGET    = 20;   // seconds of work per job, then it continues in a new job
 	const MIN_GAP   = 72000; // 20 hours: at most one full check a day
 
+	/**
+	 * Stock is not compared until orders from the site reach MasterPet (stage C,
+	 * T-280): a sale here lowers the stock here only, and the check would put it
+	 * back to MasterPet's number every night (review 19.10, Yarin decides).
+	 */
+	const SEND_STOCK = false;
+
 	/** When this job started (microtime). */
 	private static $started = 0.0;
 
@@ -39,11 +46,17 @@ final class MasterPet_Fingerprint {
 		if ( ! function_exists( 'as_has_scheduled_action' ) || ! MasterPet_Settings::is_connected() ) {
 			return;
 		}
+		// Checked at most twice a day, not on every request (review 19.10).
+		if ( false !== get_transient( 'masterpet_wc_fp_scheduled' ) ) {
+			return;
+		}
+		set_transient( 'masterpet_wc_fp_scheduled', 1, 12 * HOUR_IN_SECONDS );
 		if ( as_has_scheduled_action( self::HOOK, array(), MasterPet_Sync::GROUP ) ) {
 			return;
 		}
 		$next = new DateTime( 'tomorrow 03:00', wp_timezone() );
-		as_schedule_recurring_action( $next->getTimestamp(), DAY_IN_SECONDS, self::HOOK, array(), MasterPet_Sync::GROUP );
+		// unique: two requests at the same moment never make two daily jobs.
+		as_schedule_recurring_action( $next->getTimestamp(), DAY_IN_SECONDS, self::HOOK, array(), MasterPet_Sync::GROUP, true );
 	}
 
 	public static function run(): void {
@@ -101,19 +114,26 @@ final class MasterPet_Fingerprint {
 			}
 			foreach ( $ids as $id ) {
 				$product = wc_get_product( $id );
-				if ( $product ) {
-					foreach ( self::items_of( $product, $gross ) as $item ) {
-						$items[] = $item;
-					}
-				}
-				$cursor = $id;
-				if ( count( $items ) >= self::ITEMS ) {
+				$own     = $product ? self::items_of( $product, $gross ) : array();
+				// A request never passes ITEMS (MasterPet refuses more than 500): what waits
+				// goes first when this product would not fit, and a product with more
+				// items than one request goes in pieces (review 19.10).
+				if ( $items && count( $items ) + count( $own ) > self::ITEMS ) {
 					if ( true !== self::send( $items, false ) ) {
 						return;
 					}
 					$items = array();
 					MasterPet_Settings::update( array( 'fp_cursor' => $cursor ) );
 				}
+				while ( count( $own ) > self::ITEMS ) {
+					if ( true !== self::send( array_splice( $own, 0, self::ITEMS ), false ) ) {
+						return;
+					}
+				}
+				foreach ( $own as $item ) {
+					$items[] = $item;
+				}
+				$cursor = $id;
 			}
 			if ( self::over_budget() ) {
 				if ( $items && true !== self::send( $items, false ) ) {
@@ -158,7 +178,7 @@ final class MasterPet_Fingerprint {
 		if ( '' !== $regular && is_numeric( $regular ) ) {
 			$item['price'] = wc_format_decimal( $regular, 2 );
 		}
-		if ( $p->managing_stock() ) {
+		if ( self::SEND_STOCK && $p->managing_stock() ) {
 			$item['stock'] = (int) $p->get_stock_quantity( 'edit' );
 		}
 		return $item;
