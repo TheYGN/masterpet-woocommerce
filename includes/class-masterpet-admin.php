@@ -21,6 +21,7 @@ final class MasterPet_Admin {
 		add_action( 'admin_post_masterpet_disconnect', array( __CLASS__, 'handle_disconnect' ) );
 		add_action( 'admin_post_masterpet_sync', array( __CLASS__, 'handle_sync' ) );
 		add_action( 'admin_post_masterpet_relink', array( __CLASS__, 'handle_relink' ) );
+		add_action( 'admin_post_masterpet_fingerprint', array( __CLASS__, 'handle_fingerprint' ) );
 	}
 
 	public static function menu(): void {
@@ -118,6 +119,15 @@ final class MasterPet_Admin {
 		MasterPet_Settings::update( array( 'first_link_done' => 0, 'link_page' => 1, 'link_totals' => null ) );
 		MasterPet_Sync::schedule();
 		self::back( 'הקישור לפי מק"ט רץ שוב. מוצרים שכבר מקושרים לא משתנים.', 'success' );
+	}
+
+	/** Runs the nightly check now (T-291): every linked product that differs from MasterPet is sent again. */
+	public static function handle_fingerprint(): void {
+		self::guard( 'masterpet_fingerprint' );
+		if ( MasterPet_Fingerprint::run_now() ) {
+			self::back( 'בדיקת ההתאמה התחילה. מוצר שלא תואם ל-MasterPet יתעדכן בדקות הקרובות.', 'success' );
+		}
+		self::back( 'אי אפשר להריץ את הבדיקה עכשיו. בדוק שהאתר מחובר ל-MasterPet.', 'error' );
 	}
 
 	/** The site's clock runs on Israel time now (a named zone or a +2/+3 offset that matches it). */
@@ -251,6 +261,7 @@ final class MasterPet_Admin {
 		echo '<div class="mp-actions">';
 		self::button( 'masterpet_sync', 'סנכרן עכשיו', 'filled', 'sync' );
 		self::button( 'masterpet_relink', 'קשר שוב לפי מק"ט', 'tonal', 'link' );
+		self::button( 'masterpet_fingerprint', 'בדוק התאמה עכשיו', 'tonal', 'science' );
 		self::button( 'masterpet_check', 'בדיקת קשר', 'outlined', 'network_check' );
 		self::button( 'masterpet_disconnect', 'נתק', 'danger', 'link_off', 'mp-push' );
 		echo '</div></div>';

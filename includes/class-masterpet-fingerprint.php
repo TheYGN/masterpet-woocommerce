@@ -66,19 +66,33 @@ final class MasterPet_Fingerprint {
 		$s      = MasterPet_Settings::get();
 		$cursor = (int) ( $s['fp_cursor'] ?? 0 );
 		// A new check starts at most once in 20 hours; a check already under way goes on.
-		if ( 0 === $cursor && time() - (int) ( $s['fp_done_at'] ?? 0 ) < self::MIN_GAP ) {
+		// "בדוק עכשיו" on the MasterPet screen (run_now) starts one anyway.
+		if ( 0 === $cursor && empty( $s['fp_force'] ) && time() - (int) ( $s['fp_done_at'] ?? 0 ) < self::MIN_GAP ) {
 			return;
 		}
 		if ( false !== get_transient( self::LOCK ) ) {
 			return;
 		}
 		set_transient( self::LOCK, 1, 10 * MINUTE_IN_SECONDS );
+		if ( ! empty( $s['fp_force'] ) ) {
+			MasterPet_Settings::update( array( 'fp_force' => 0 ) );
+		}
 		self::$started = microtime( true );
 		try {
 			self::check( $cursor, (string) ( $s['site_id'] ?? '' ) );
 		} finally {
 			delete_transient( self::LOCK );
 		}
+	}
+
+	/** A check now, from the MasterPet screen: not held back by the once-a-day gap. */
+	public static function run_now(): bool {
+		if ( ! function_exists( 'as_enqueue_async_action' ) || ! MasterPet_Settings::is_connected() ) {
+			return false;
+		}
+		MasterPet_Settings::update( array( 'fp_force' => 1 ) );
+		as_enqueue_async_action( self::HOOK, array(), MasterPet_Sync::GROUP );
+		return true;
 	}
 
 	private static function over_budget(): bool {
