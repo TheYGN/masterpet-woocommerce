@@ -73,6 +73,9 @@ The first letter of the code picks the server: `T` = test, `P` = production.
    MasterPet the SKU and regular price of every linked item (stock from stage C on); MasterPet
    sends again every product that differs. Nothing is written here by the check.
    "בדוק התאמה עכשיו" on the MasterPet screen (0.12.1) runs it at once.
+7. Variations in the link report (0.13.0): each variation also sends its regular
+   price, stock and attributes (label and term name for a store-wide attribute),
+   so MasterPet can add a product with variations that exists only here (T-311).
 
 Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real
