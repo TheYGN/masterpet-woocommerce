@@ -72,6 +72,7 @@ The first letter of the code picks the server: `T` = test, `P` = production.
 6. Nightly check (0.12.0): once a day (03:00 site time) the plugin sends
    MasterPet the SKU and regular price of every linked item (stock from stage C on); MasterPet
    sends again every product that differs. Nothing is written here by the check.
+   "בדוק התאמה עכשיו" on the MasterPet screen (0.12.1) runs it at once.
 
 Before MasterPet rings a site for the first time it sends a signed ping and
 expects an answer signed with the site's secret, so it only ever rings the real
