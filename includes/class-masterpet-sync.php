@@ -121,6 +121,61 @@ final class MasterPet_Sync {
 	// ── 1. first link ─────────────────────────────────────────────────────
 
 	/**
+	 * A variation in the link report (T-311, 0.13.0): with its regular price,
+	 * stock and attributes, so MasterPet can add a product with variations that
+	 * exists only here ("הוסף למערכת"). Attributes as the shopper sees them: the
+	 * label and the term name for a store-wide attribute (pa_*), the name and the
+	 * value for one set in the product. An empty value = "any" on this site.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function variation_item( WC_Product $v, WC_Product $parent ): array {
+		$one     = array(
+			'woo_id'    => $v->get_id(),
+			'type'      => 'variation',
+			'parent_id' => $parent->get_id(),
+			'sku'       => (string) $v->get_sku( 'edit' ),
+			'name'      => $v->get_name( 'edit' ),
+		);
+		$regular = (string) $v->get_regular_price( 'edit' );
+		if ( '' !== $regular && is_numeric( $regular ) ) {
+			$one['price']       = wc_format_decimal( $regular, 2 );
+			$one['price_gross'] = ! wc_tax_enabled() || wc_prices_include_tax();
+		}
+		if ( $v->managing_stock() ) {
+			$one['stock'] = max( 0, (int) $v->get_stock_quantity( 'edit' ) );
+		}
+		$own   = $v->get_attributes( 'edit' );
+		$attrs = array();
+		foreach ( $parent->get_attributes() as $attr ) {
+			if ( ! $attr instanceof WC_Product_Attribute || ! $attr->get_variation() ) {
+				continue;
+			}
+			$name  = $attr->get_name();
+			$key   = $attr->is_taxonomy() ? $name : sanitize_title( $name );
+			$value = isset( $own[ $key ] ) ? (string) $own[ $key ] : '';
+			if ( $attr->is_taxonomy() ) {
+				$label = wc_attribute_label( $name, $parent );
+				$term  = '' !== $value ? get_term_by( 'slug', $value, $name ) : false;
+				$value = $term ? $term->name : '';
+			} else {
+				$label = $name;
+			}
+			$attrs[] = array(
+				'name'  => mb_substr( wp_strip_all_tags( (string) $label ), 0, 100 ),
+				'value' => mb_substr( wp_strip_all_tags( $value ), 0, 100 ),
+			);
+			if ( count( $attrs ) >= 10 ) {
+				break;
+			}
+		}
+		if ( $attrs ) {
+			$one['attributes'] = $attrs;
+		}
+		return $one;
+	}
+
+	/**
 	 * Resumable: a big catalog spreads over several jobs (cursor link_page).
 	 *
 	 * @return true|string true = done, CONTINUE_LINK = more pages next job, other string = error.
@@ -159,13 +214,7 @@ final class MasterPet_Sync {
 						if ( ! $v ) {
 							continue;
 						}
-						$group[] = array(
-							'woo_id'    => $v->get_id(),
-							'type'      => 'variation',
-							'parent_id' => $product->get_id(),
-							'sku'       => (string) $v->get_sku( 'edit' ),
-							'name'      => $v->get_name( 'edit' ),
-						);
+						$group[] = self::variation_item( $v, $product );
 					}
 					// A parent always travels with its variations. Past 450 variations
 					// the rest is not sent (MasterPet takes 500 items a request); they
