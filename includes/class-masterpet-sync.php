@@ -142,7 +142,9 @@ final class MasterPet_Sync {
 			$one['price']       = wc_format_decimal( $regular, 2 );
 			$one['price_gross'] = ! wc_tax_enabled() || wc_prices_include_tax();
 		}
-		if ( $v->managing_stock() ) {
+		// Only a variation with its own stock count. One that shares its parent's stock
+		// (manage_stock 'parent') has no count of its own: none is sent (review 20.10).
+		if ( true === $v->get_manage_stock( 'edit' ) ) {
 			$one['stock'] = max( 0, (int) $v->get_stock_quantity( 'edit' ) );
 		}
 		$own   = $v->get_attributes( 'edit' );
@@ -152,7 +154,9 @@ final class MasterPet_Sync {
 				continue;
 			}
 			$name  = $attr->get_name();
-			$key   = $attr->is_taxonomy() ? $name : sanitize_title( $name );
+			// WooCommerce keys every variation attribute by sanitize_title( name ), a
+			// store-wide pa_* one too (a Hebrew slug is stored percent-encoded).
+			$key   = sanitize_title( $name );
 			$value = isset( $own[ $key ] ) ? (string) $own[ $key ] : '';
 			if ( $attr->is_taxonomy() ) {
 				$label = wc_attribute_label( $name, $parent );
@@ -162,8 +166,8 @@ final class MasterPet_Sync {
 				$label = $name;
 			}
 			$attrs[] = array(
-				'name'  => mb_substr( wp_strip_all_tags( (string) $label ), 0, 100 ),
-				'value' => mb_substr( wp_strip_all_tags( $value ), 0, 100 ),
+				'name'  => mb_substr( html_entity_decode( wp_strip_all_tags( (string) $label ), ENT_QUOTES, 'UTF-8' ), 0, 100 ),
+				'value' => mb_substr( html_entity_decode( wp_strip_all_tags( $value ), ENT_QUOTES, 'UTF-8' ), 0, 100 ),
 			);
 			if ( count( $attrs ) >= 10 ) {
 				break;
@@ -221,6 +225,14 @@ final class MasterPet_Sync {
 					// stay unlinked and the owner links them by hand (B2).
 					$group = array_slice( $group, 0, 450 );
 					$size  = strlen( (string) wp_json_encode( $group, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+					// A product too big for one request goes without its attributes (MasterPet then
+					// asks to update the plugin before "הוסף למערכת"); the link still works.
+					if ( $size > self::LINK_BYTES ) {
+						foreach ( $group as $i => $g ) {
+							unset( $group[ $i ]['attributes'] );
+						}
+						$size = strlen( (string) wp_json_encode( $group, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+					}
 					if ( $items && ( count( $items ) + count( $group ) > self::LINK_ITEMS || $bytes + $size > self::LINK_BYTES ) ) {
 						$r = self::send_link_page( $items, false, $totals );
 						if ( true !== $r ) {
